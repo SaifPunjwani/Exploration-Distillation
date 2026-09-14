@@ -1,0 +1,21 @@
+# Optional torch_xla pilot environment. Install separately from JAX.
+# For JAX use requirements-dev.lock or expdis_jax/requirements.txt.
+torch
+torchvision
+torchaudio
+transformers<5
+tokenizers
+trl==0.17.0
+datasets
+matplotlib
+tqdm
+accelerate
+scipy
+scikit-learn
+umap-learn
+wandb==0.17.9
+sentencepiece
+tiktoken
+numpy<2
+pytest
+requests

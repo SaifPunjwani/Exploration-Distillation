@@ -1,0 +1,3 @@
+# label	source_type	model_ref	role_label	notes
+qwen25_math_1p5b_raw	hf	Qwen/Qwen2.5-Math-1.5B-Instruct	raw_base	anchor raw base
+qwen3_1p7b_raw	hf	Qwen/Qwen3-1.7B	raw_base	target raw base

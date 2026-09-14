@@ -1,0 +1,7 @@
+# label	source_type	model_ref	role_label	notes
+qwen3_1p7b_raw	hf	Qwen/Qwen3-1.7B	base	Qwen3 primary raw baseline
+qwen25_math_1p5b_raw	hf	Qwen/Qwen2.5-Math-1.5B-Instruct	base	internal raw math anchor
+openmath_nemotron_1p5b_raw	hf	nvidia/OpenMath-Nemotron-1.5B	base	open math raw baseline
+phi4_mini_reasoning_raw	hf	microsoft/Phi-4-mini-reasoning	base	non-Qwen raw baseline
+qwen3_4b_raw	hf	Qwen/Qwen3-4B	base	Qwen scale-up raw baseline
+openmath_nemotron_7b_raw	hf	nvidia/OpenMath-Nemotron-7B	base	larger open math raw baseline
