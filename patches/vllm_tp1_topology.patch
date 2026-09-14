@@ -1,0 +1,94 @@
+diff --git a/tmx_jax/scripts/bootstrap_vllm_worker.sh b/tmx_jax/scripts/bootstrap_vllm_worker.sh
+index 1c38441..c36bc4a 100755
+--- a/tmx_jax/scripts/bootstrap_vllm_worker.sh
++++ b/tmx_jax/scripts/bootstrap_vllm_worker.sh
+@@ -17,6 +17,25 @@ VLLM_TPU_BUCKET_PADDING_GAP="${VLLM_TPU_BUCKET_PADDING_GAP:-}"
+ VLLM_TPU_MOST_MODEL_LEN="${VLLM_TPU_MOST_MODEL_LEN:-}"
+ VLLM_XLA_CACHE_PATH="${VLLM_XLA_CACHE_PATH:-$HOME/.cache/vllm/xla_cache}"
+ DISABLE_LOG_REQUESTS="${DISABLE_LOG_REQUESTS:-1}"
++if [ -z "${TPU_VISIBLE_CHIPS:-}" ]; then
++  if [ "$TP" = "1" ]; then
++    TPU_VISIBLE_CHIPS="0"
++  else
++    TPU_VISIBLE_CHIPS="0,1,2,3"
++  fi
++fi
++TPU_PROCESS_BOUNDS="${TPU_PROCESS_BOUNDS:-1,1,1}"
++if [ -z "${TPU_CHIPS_PER_PROCESS_BOUNDS:-}" ]; then
++  if [ "$TP" = "1" ]; then
++    TPU_CHIPS_PER_PROCESS_BOUNDS="1,1,1"
++  else
++    TPU_CHIPS_PER_PROCESS_BOUNDS="2,2,1"
++  fi
++fi
++if [ -z "${TPU_CHIPS_PER_HOST_BOUNDS:-}" ]; then
++  TPU_CHIPS_PER_HOST_BOUNDS="$TPU_CHIPS_PER_PROCESS_BOUNDS"
++fi
++TPU_HOST_BOUNDS="${TPU_HOST_BOUNDS:-1,1,1}"
+ 
+ stop_existing_vllm() {
+   pkill -9 -f "[v]llm serve" 2>/dev/null || true
+@@ -67,11 +86,11 @@ set -euo pipefail
+ export PATH="$VLLM_VENV_DIR/bin:\$PATH"
+ export PJRT_DEVICE="\${PJRT_DEVICE:-TPU}"
+ export TPU_SKIP_MDS_QUERY="\${TPU_SKIP_MDS_QUERY:-1}"
+-export TPU_VISIBLE_CHIPS="\${TPU_VISIBLE_CHIPS:-0,1,2,3}"
+-export TPU_PROCESS_BOUNDS="\${TPU_PROCESS_BOUNDS:-1,1,1}"
+-export TPU_CHIPS_PER_PROCESS_BOUNDS="\${TPU_CHIPS_PER_PROCESS_BOUNDS:-2,2,1}"
+-export TPU_CHIPS_PER_HOST_BOUNDS="\${TPU_CHIPS_PER_HOST_BOUNDS:-2,2,1}"
+-export TPU_HOST_BOUNDS="\${TPU_HOST_BOUNDS:-1,1,1}"
++export TPU_VISIBLE_CHIPS="$TPU_VISIBLE_CHIPS"
++export TPU_PROCESS_BOUNDS="$TPU_PROCESS_BOUNDS"
++export TPU_CHIPS_PER_PROCESS_BOUNDS="$TPU_CHIPS_PER_PROCESS_BOUNDS"
++export TPU_CHIPS_PER_HOST_BOUNDS="$TPU_CHIPS_PER_HOST_BOUNDS"
++export TPU_HOST_BOUNDS="$TPU_HOST_BOUNDS"
+ export TPU_WORKER_HOSTNAMES="\${TPU_WORKER_HOSTNAMES:-localhost}"
+ export VLLM_XLA_CACHE_PATH="\${VLLM_XLA_CACHE_PATH:-$VLLM_XLA_CACHE_PATH}"
+ export XLA_PERSISTENT_CACHE_PATH="\${XLA_PERSISTENT_CACHE_PATH:-\$VLLM_XLA_CACHE_PATH}"
+diff --git a/tmx_jax/scripts/reload_vllm_worker_detached.sh b/tmx_jax/scripts/reload_vllm_worker_detached.sh
+index caa1b45..1c05b3a 100755
+--- a/tmx_jax/scripts/reload_vllm_worker_detached.sh
++++ b/tmx_jax/scripts/reload_vllm_worker_detached.sh
+@@ -22,6 +22,25 @@ VLLM_XLA_CACHE_PATH="${VLLM_XLA_CACHE_PATH:-$HOME/.cache/vllm/xla_cache}"
+ DISABLE_LOG_REQUESTS="${DISABLE_LOG_REQUESTS:-1}"
+ LOG_FILE="${LOG_FILE:-$HOME/vllm_reload_worker.log}"
+ MODEL_IMPL_TYPE="${MODEL_IMPL_TYPE:-auto}"
++if [ -z "${TPU_VISIBLE_CHIPS:-}" ]; then
++  if [ "$TP_SIZE" = "1" ]; then
++    TPU_VISIBLE_CHIPS="0"
++  else
++    TPU_VISIBLE_CHIPS="0,1,2,3"
++  fi
++fi
++TPU_PROCESS_BOUNDS="${TPU_PROCESS_BOUNDS:-1,1,1}"
++if [ -z "${TPU_CHIPS_PER_PROCESS_BOUNDS:-}" ]; then
++  if [ "$TP_SIZE" = "1" ]; then
++    TPU_CHIPS_PER_PROCESS_BOUNDS="1,1,1"
++  else
++    TPU_CHIPS_PER_PROCESS_BOUNDS="2,2,1"
++  fi
++fi
++if [ -z "${TPU_CHIPS_PER_HOST_BOUNDS:-}" ]; then
++  TPU_CHIPS_PER_HOST_BOUNDS="$TPU_CHIPS_PER_PROCESS_BOUNDS"
++fi
++TPU_HOST_BOUNDS="${TPU_HOST_BOUNDS:-1,1,1}"
+ 
+ if [ -z "$GCS_MODEL_PATH" ] && { [ -z "$HF_REPO_ID" ] || [ -z "$HF_PATH_IN_REPO" ]; }; then
+   echo "[reload-worker] ERROR: set either GCS_MODEL_PATH or HF_REPO_ID+HF_PATH_IN_REPO" >&2
+@@ -108,11 +127,11 @@ set -euo pipefail
+ export PATH="$VLLM_VENV_DIR/bin:\$PATH"
+ export PJRT_DEVICE="\${PJRT_DEVICE:-TPU}"
+ export TPU_SKIP_MDS_QUERY="\${TPU_SKIP_MDS_QUERY:-1}"
+-export TPU_VISIBLE_CHIPS="\${TPU_VISIBLE_CHIPS:-0,1,2,3}"
+-export TPU_PROCESS_BOUNDS="\${TPU_PROCESS_BOUNDS:-1,1,1}"
+-export TPU_CHIPS_PER_PROCESS_BOUNDS="\${TPU_CHIPS_PER_PROCESS_BOUNDS:-2,2,1}"
+-export TPU_CHIPS_PER_HOST_BOUNDS="\${TPU_CHIPS_PER_HOST_BOUNDS:-2,2,1}"
+-export TPU_HOST_BOUNDS="\${TPU_HOST_BOUNDS:-1,1,1}"
++export TPU_VISIBLE_CHIPS="$TPU_VISIBLE_CHIPS"
++export TPU_PROCESS_BOUNDS="$TPU_PROCESS_BOUNDS"
++export TPU_CHIPS_PER_PROCESS_BOUNDS="$TPU_CHIPS_PER_PROCESS_BOUNDS"
++export TPU_CHIPS_PER_HOST_BOUNDS="$TPU_CHIPS_PER_HOST_BOUNDS"
++export TPU_HOST_BOUNDS="$TPU_HOST_BOUNDS"
+ export TPU_WORKER_HOSTNAMES="\${TPU_WORKER_HOSTNAMES:-localhost}"
+ export MODEL_IMPL_TYPE="$MODEL_IMPL_TYPE"
+ export VLLM_XLA_CACHE_PATH="\${VLLM_XLA_CACHE_PATH:-$VLLM_XLA_CACHE_PATH}"

@@ -1,0 +1,45 @@
+{
+  "benchmarks": {
+    "MATH500": {
+      "benchmark": "MATH500",
+      "canonical_rows_sha256": "553f055c842476cc47f45cd84e518ef1b423473f455624eda37b0649be232767",
+      "dataset_revision": "6e4ed1a2a79af7d8630a6b768ec859cb5af4d3be",
+      "exact_string_only_count": 124,
+      "gold_answers_sha256": "ed56d3bd17decc90a6e0abf9e6cd43f21817b437bc800c194b014a8031730a4f",
+      "numeric_equivalence_supported_count": 376,
+      "problem_count": 500,
+      "syntax_counts": {
+        "exact_string_algebraic_or_text": 37,
+        "exact_string_other": 6,
+        "exact_string_other_math": 5,
+        "exact_string_pi_expression": 6,
+        "exact_string_radical": 20,
+        "exact_string_set_matrix_or_braced": 8,
+        "exact_string_symbolic_fraction": 18,
+        "exact_string_text_or_units": 11,
+        "exact_string_tuple_interval_or_function": 13,
+        "numeric_equivalence_supported": 376
+      }
+    },
+    "Minerva-Math": {
+      "benchmark": "Minerva-Math",
+      "canonical_rows_sha256": "b25fb30e62b0f58aeef96cb30549c8c6cb6e5ea2bf8d15a45ed78ade48ba8836",
+      "dataset_revision": "ee46ddc498933b1977577953250ca5c66be64f96",
+      "exact_string_only_count": 82,
+      "gold_answers_sha256": "854c87dc582a32cb8d43a989ddf24a57749b4ca924ce2c93cf79199ba5f82167",
+      "numeric_equivalence_supported_count": 190,
+      "problem_count": 272,
+      "syntax_counts": {
+        "exact_string_algebraic_or_text": 9,
+        "exact_string_pi_expression": 3,
+        "exact_string_radical": 6,
+        "exact_string_set_matrix_or_braced": 7,
+        "exact_string_symbolic_fraction": 48,
+        "exact_string_tuple_interval_or_function": 9,
+        "numeric_equivalence_supported": 190
+      }
+    }
+  },
+  "schema_version": "tmx_gpu.gold_syntax_audit_v1",
+  "verifier_scope": "bounded numeric equivalence plus normalized exact-string fallback"
+}

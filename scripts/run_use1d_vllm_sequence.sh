@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+VLLM_VENV_DIR="${VLLM_VENV_DIR:-$HOME/vllm_tpu_env}"
+MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-1.7B}"
+SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_NAME}"
+TOKENIZER_NAME="${TOKENIZER_NAME:-$MODEL_NAME}"
+RUN_PREFIX="${RUN_PREFIX:-use1d_qwen3_1p7b_vllm_$(date +%Y%m%d_%H%M%S)}"
+PORT="${PORT:-8000}"
+TP_SIZE="${TP_SIZE:-4}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
+MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-65536}"
+SMOKE_MAX_BENCHMARK="${SMOKE_MAX_BENCHMARK:-1}"
+FULL_MAX_BENCHMARK="${FULL_MAX_BENCHMARK:-30}"
+BENCHMARK_NUM_ROLLOUTS="${BENCHMARK_NUM_ROLLOUTS:-32}"
+BENCHMARK_ROLLOUT_TEMPERATURE="${BENCHMARK_ROLLOUT_TEMPERATURE:-1.0}"
+BENCHMARK_ROLLOUT_TOP_P="${BENCHMARK_ROLLOUT_TOP_P:-1.0}"
+BENCHMARK_ROLLOUT_PASS_K="${BENCHMARK_ROLLOUT_PASS_K:-1,4,8,16,32}"
+BENCHMARK_ROLLOUT_MAX_COMPLETION_LEN="${BENCHMARK_ROLLOUT_MAX_COMPLETION_LEN:-16384}"
+REQUEST_CONCURRENCY="${REQUEST_CONCURRENCY:-32}"
+REQUEST_TIMEOUT_SECONDS="${REQUEST_TIMEOUT_SECONDS:-1800}"
+MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-2048}"
+BENCHMARK_DATASET_NAME="${BENCHMARK_DATASET_NAME:-aime_2024}"
+BENCHMARK_DATASET_CONFIG_NAME="${BENCHMARK_DATASET_CONFIG_NAME:-}"
+RUN_AIME25_AFTER_AIME24="${RUN_AIME25_AFTER_AIME24:-0}"
+AIME25_MAX_BENCHMARK="${AIME25_MAX_BENCHMARK:-30}"
+USE_WANDB="${USE_WANDB:-1}"
+WANDB_GROUP="${WANDB_GROUP:-use1d_vllm_aime}"
+
+SERVER_SESSION="vllm_server_${RUN_PREFIX}"
+SERVER_BASE_URL="http://127.0.0.1:${PORT}/v1"
+SERVER_LOG="runs/${RUN_PREFIX}/server.log"
+mkdir -p "runs/${RUN_PREFIX}"
+
+if [ ! -x "$VLLM_VENV_DIR/bin/python" ]; then
+  VLLM_VENV_DIR="$VLLM_VENV_DIR" bash scripts/bootstrap_vllm_tpu_env.sh
+fi
+
+source "$VLLM_VENV_DIR/bin/activate"
+python -m pip install -q datasets wandb
+
+tmux kill-session -t "$SERVER_SESSION" >/dev/null 2>&1 || true
+tmux new-session -d -s "$SERVER_SESSION" \
+  "cd '$ROOT_DIR' && MODEL_NAME='$MODEL_NAME' SERVED_MODEL_NAME='$SERVED_MODEL_NAME' PORT='$PORT' TP_SIZE='$TP_SIZE' MAX_MODEL_LEN='$MAX_MODEL_LEN' GPU_MEMORY_UTILIZATION='$GPU_MEMORY_UTILIZATION' MAX_NUM_SEQS='$MAX_NUM_SEQS' MAX_NUM_BATCHED_TOKENS='$MAX_NUM_BATCHED_TOKENS' VLLM_VENV_DIR='$VLLM_VENV_DIR' bash scripts/run_vllm_server.sh > '$SERVER_LOG' 2>&1"
+
+echo "[use1d-seq] waiting for server at $SERVER_BASE_URL"
+for _ in $(seq 1 180); do
+  if curl -sf "$SERVER_BASE_URL/models" >/dev/null 2>&1; then
+    echo "[use1d-seq] server ready"
+    break
+  fi
+  sleep 10
+done
+
+if ! curl -sf "$SERVER_BASE_URL/models" >/dev/null 2>&1; then
+  echo "[use1d-seq] server failed to become ready" >&2
+  exit 1
+fi
+
+run_eval() {
+  local run_name="$1"
+  local dataset_name="$2"
+  local dataset_config_name="$3"
+  local max_benchmark="$4"
+
+  echo "[use1d-seq] starting ${run_name} on ${dataset_name}"
+  PYTHON_BIN="$VLLM_VENV_DIR/bin/python" \
+  SERVER_BASE_URL="$SERVER_BASE_URL" \
+  MODEL_NAME="$MODEL_NAME" \
+  SERVED_MODEL_NAME="$SERVED_MODEL_NAME" \
+  TOKENIZER_NAME="$TOKENIZER_NAME" \
+  RUN_NAME="$run_name" \
+  ROLE_NAME="base" \
+  BENCHMARK_DATASET_NAME="$dataset_name" \
+  BENCHMARK_DATASET_CONFIG_NAME="$dataset_config_name" \
+  MAX_BENCHMARK="$max_benchmark" \
+  BENCHMARK_NUM_ROLLOUTS="$BENCHMARK_NUM_ROLLOUTS" \
+  BENCHMARK_ROLLOUT_TEMPERATURE="$BENCHMARK_ROLLOUT_TEMPERATURE" \
+  BENCHMARK_ROLLOUT_TOP_P="$BENCHMARK_ROLLOUT_TOP_P" \
+  BENCHMARK_ROLLOUT_PASS_K="$BENCHMARK_ROLLOUT_PASS_K" \
+  BENCHMARK_ROLLOUT_MAX_COMPLETION_LEN="$BENCHMARK_ROLLOUT_MAX_COMPLETION_LEN" \
+  REQUEST_CONCURRENCY="$REQUEST_CONCURRENCY" \
+  REQUEST_TIMEOUT_SECONDS="$REQUEST_TIMEOUT_SECONDS" \
+  MAX_PROMPT_LEN="$MAX_PROMPT_LEN" \
+  USE_WANDB="$USE_WANDB" \
+  WANDB_GROUP="$WANDB_GROUP" \
+  bash scripts/run_vllm_aime_rollout_eval.sh
+}
+
+SMOKE_RUN_NAME="${RUN_PREFIX}_aime24_smoke"
+run_eval "$SMOKE_RUN_NAME" "$BENCHMARK_DATASET_NAME" "$BENCHMARK_DATASET_CONFIG_NAME" "$SMOKE_MAX_BENCHMARK"
+
+SMOKE_SUMMARY="runs/${SMOKE_RUN_NAME}/analysis/benchmark_summary.json"
+if [ ! -f "$SMOKE_SUMMARY" ]; then
+  echo "[use1d-seq] missing smoke summary: $SMOKE_SUMMARY" >&2
+  exit 1
+fi
+
+if [ "${FULL_MAX_BENCHMARK}" -gt 0 ]; then
+  FULL_RUN_NAME="${RUN_PREFIX}_aime24_full"
+  run_eval "$FULL_RUN_NAME" "$BENCHMARK_DATASET_NAME" "$BENCHMARK_DATASET_CONFIG_NAME" "$FULL_MAX_BENCHMARK"
+fi
+
+case "$RUN_AIME25_AFTER_AIME24" in
+  1|true|TRUE|yes|YES)
+    AIME25_RUN_NAME="${RUN_PREFIX}_aime25_full"
+    run_eval "$AIME25_RUN_NAME" "aime_2025" "all" "$AIME25_MAX_BENCHMARK"
+    ;;
+esac
+
+echo "[use1d-seq] complete"

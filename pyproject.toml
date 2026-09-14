@@ -1,0 +1,85 @@
+# Tooling-only configuration. The project still uses requirements.txt for
+# install — this file exists to anchor ruff / vulture / pytest defaults so
+# the orchestration layer stays clean across contributors.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    "wandb",
+    "runs",
+    "runs_logs",
+    "rollouts*",
+    "outputs",
+    "logs",
+    "plots",
+    "paper_figures",
+    ".scratch",
+    ".claude",
+    ".venv*",
+    "venv*",
+    "rl_env*",
+    "gpu_train",
+    "baseline_grpo",
+    "codex-autoresearch",
+    "patches",
+]
+
+[tool.ruff.lint]
+# Selected rule families:
+#   E,W   — pycodestyle
+#   F     — pyflakes (unused, undefined)
+#   I     — isort (import ordering)
+#   B     — bugbear (likely-bug patterns)
+#   UP    — pyupgrade (modern syntax)
+#   SIM   — simplify (redundant code)
+#   RUF   — ruff-specific rules
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",  # line too long — formatter handles
+    "B008",  # function call as default arg (datatclass field defaults trip this)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "B017"]
+"main.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tmx", "tmx_jax"]
+
+[tool.vulture]
+# Find dead code (unused symbols). 80% confidence is the recommended floor:
+# anything below that is too noisy.
+min_confidence = 80
+paths = [
+    "tmx/orchestration",
+    "scripts/tmx_submit.py",
+    "scripts/tmx_paper.py",
+]
+exclude = [
+    "tests",
+    "wandb",
+    "runs",
+    "runs_logs",
+    "rollouts*",
+    ".scratch",
+    "patches",
+]
+ignore_decorators = ["@pytest.fixture", "@dataclass"]
+ignore_names = [
+    "main",         # CLI entrypoints
+    "describe",     # workload action
+    "run",          # workload action
+    "cmd_*",        # cli subcommand handlers
+    "test_*",       # pytest tests
+    "register_extras",  # opt-in registry hook
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "rollouts_local/tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]

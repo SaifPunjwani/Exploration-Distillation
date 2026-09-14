@@ -1,0 +1,558 @@
+--- a/tmx_jax/train.py
++++ b/tmx_jax/train.py
+@@ -1777,7 +1777,16 @@
+     return None
+ 
+ 
+-def _maybe_reload_vllm_from_gcs(gcs_model_path: str, cfg: TrainConfig, *, stage: str) -> bool:
++def _maybe_reload_vllm_from_gcs(
++    gcs_model_path: str | None,
++    cfg: TrainConfig,
++    *,
++    stage: str,
++    hf_repo_id: str = "",
++    hf_path_in_repo: str = "",
++    hf_repo_type: str = "dataset",
++    hf_revision: str = "",
++) -> bool:
+     """Reload configured rollout workers with the exported current-policy HF bundle.
+ 
+     The reload is called only at checkpoint/resume boundaries, before the next
+@@ -1793,7 +1802,11 @@
+     env = os.environ.copy()
+     env.update(
+         {
+-            "GCS_MODEL_PATH": gcs_model_path,
++            "GCS_MODEL_PATH": gcs_model_path or "",
++            "HF_REPO_ID": hf_repo_id,
++            "HF_REPO_TYPE": hf_repo_type,
++            "HF_PATH_IN_REPO": hf_path_in_repo,
++            "HF_REVISION": hf_revision,
+             "TPU_NAME": tpu_name,
+             "ZONE": zone,
+             "TPU_PROJECT": (
+@@ -1828,7 +1841,17 @@
+     return False
+ 
+ 
+-def _request_external_vllm_reload(gcs_model_path: str, cfg: TrainConfig, *, stage: str, step: int) -> bool:
++def _request_external_vllm_reload(
++    gcs_model_path: str | None,
++    cfg: TrainConfig,
++    *,
++    stage: str,
++    step: int,
++    hf_repo_id: str = "",
++    hf_path_in_repo: str = "",
++    hf_repo_type: str = "dataset",
++    hf_revision: str = "",
++) -> bool:
+     """Request an out-of-process vLLM reload and wait until it is acknowledged.
+ 
+     This is for TPU setups where the training VM can run JAX, but its local
+@@ -1852,7 +1875,11 @@
+             pass
+ 
+     payload = {
+-        "gcs_model_path": gcs_model_path,
++        "gcs_model_path": gcs_model_path or "",
++        "hf_repo_id": hf_repo_id,
++        "hf_repo_type": hf_repo_type,
++        "hf_path_in_repo": hf_path_in_repo,
++        "hf_revision": hf_revision,
+         "stage": stage,
+         "step": int(step),
+         "model_name": cfg.model_name,
+@@ -1921,12 +1948,15 @@
+     if jax.process_index() != 0:
+         return
+     gcs_base = (os.environ.get("TMX_GCS_CHECKPOINT_BASE") or "").strip()
+-    if not gcs_base:
+-        print("[vllm-reload] skipped: TMX_GCS_CHECKPOINT_BASE not set", flush=True)
++    hf_repo_id = _hf_artifact_repo()
++    mirror_to_hf = _env_flag("TMX_HF_MIRROR_VLLM_EXPORTS", "0") and bool(hf_repo_id)
++    if not gcs_base and not mirror_to_hf:
++        print("[vllm-reload] skipped: no GCS base or HF artifact repo configured", flush=True)
+         return
+     stage = _stage_name_for_output(cfg)
+     local_dir = os.path.join(cfg.output_dir, "vllm_reload_hf", f"step_{step:06d}")
+-    gcs_target = f"{gcs_base.rstrip('/')}/{stage}_vllm_reload_hf/step_{step:06d}"
++    gcs_target = f"{gcs_base.rstrip('/')}/{stage}_vllm_reload_hf/step_{step:06d}" if gcs_base else ""
++    hf_path_in_repo = f"{_hf_run_prefix(cfg)}/{stage}_vllm_reload_hf/step_{step:06d}"
+     reload_required = os.environ.get("TMX_EXTERNAL_VLLM_RELOAD_REQUIRED", "1") not in ("0", "false", "False")
+     delete_local = os.environ.get("TMX_DELETE_LOCAL_VLLM_RELOAD_AFTER_UPLOAD", "1") not in (
+         "0",
+@@ -1957,23 +1987,40 @@
+                 bool(m_cfg.tie_word_embeddings),
+                 os.path.abspath(local_dir),
+             )
+-        uploaded = _maybe_upload_hf_dir_to_gcs(local_dir, gcs_target)
+-        if uploaded and _env_flag("TMX_HF_MIRROR_VLLM_EXPORTS", "0"):
+-            _maybe_upload_path_to_hf(
++        hf_uploaded = False
++        if mirror_to_hf:
++            hf_uploaded = _maybe_upload_path_to_hf(
+                 local_dir,
+                 cfg,
+-                f"{_hf_run_prefix(cfg)}/{stage}_vllm_reload_hf/step_{step:06d}",
++                hf_path_in_repo,
+                 is_dir=True,
+             )
++        if gcs_target:
++            uploaded = _maybe_upload_hf_dir_to_gcs(local_dir, gcs_target)
+         del params_host
+         gc.collect()
+-        if uploaded:
++        if uploaded or hf_uploaded:
+             reload_stage = f"{stage}_{reason}_step_{step:06d}"
+             mode = os.environ.get("TMX_TRAIN_VLLM_RELOAD_MODE", "direct").strip().lower()
+             if mode == "external":
+-                ok = _request_external_vllm_reload(uploaded, cfg, stage=reload_stage, step=step)
++                ok = _request_external_vllm_reload(
++                    uploaded,
++                    cfg,
++                    stage=reload_stage,
++                    step=step,
++                    hf_repo_id=hf_repo_id if hf_uploaded else "",
++                    hf_path_in_repo=hf_path_in_repo if hf_uploaded else "",
++                    hf_repo_type="dataset",
++                )
+             else:
+-                ok = _maybe_reload_vllm_from_gcs(uploaded, cfg, stage=reload_stage)
++                ok = _maybe_reload_vllm_from_gcs(
++                    uploaded,
++                    cfg,
++                    stage=reload_stage,
++                    hf_repo_id=hf_repo_id if hf_uploaded else "",
++                    hf_path_in_repo=hf_path_in_repo if hf_uploaded else "",
++                    hf_repo_type="dataset",
++                )
+             if reload_required and not ok:
+                 raise RuntimeError(f"vLLM reload failed for {reload_stage}")
+     except Exception as e:
+--- a/tmx_jax/pipeline.py
++++ b/tmx_jax/pipeline.py
+@@ -403,12 +403,16 @@
+ 
+ 
+ def _maybe_reload_vllm_slice(
+-    gcs_model_path: str,
++    gcs_model_path: str | None,
+     cfg: TrainConfig,
+     *,
+     max_model_len: int,
+     max_num_seqs: int,
+     stage: str,
++    hf_repo_id: str = "",
++    hf_path_in_repo: str = "",
++    hf_repo_type: str = "dataset",
++    hf_revision: str = "",
+ ) -> str | None:
+     """Reload configured TPU vLLM workers with a newly exported HF model.
+ 
+@@ -444,11 +448,19 @@
+             stage=stage,
+             max_model_len=max_model_len,
+             server_urls=server_urls,
++            hf_repo_id=hf_repo_id,
++            hf_path_in_repo=hf_path_in_repo,
++            hf_repo_type=hf_repo_type,
++            hf_revision=hf_revision,
+         )
+     env = os.environ.copy()
+     env.update(
+         {
+-            "GCS_MODEL_PATH": gcs_model_path,
++            "GCS_MODEL_PATH": gcs_model_path or "",
++            "HF_REPO_ID": hf_repo_id,
++            "HF_REPO_TYPE": hf_repo_type,
++            "HF_PATH_IN_REPO": hf_path_in_repo,
++            "HF_REVISION": hf_revision,
+             "TPU_NAME": tpu_name,
+             "ZONE": zone,
+             "WORKERS": workers,
+@@ -506,12 +518,16 @@
+ 
+ 
+ def _request_external_pipeline_vllm_reload(
+-    gcs_model_path: str,
++    gcs_model_path: str | None,
+     cfg: TrainConfig,
+     *,
+     stage: str,
+     max_model_len: int,
+     server_urls: str,
++    hf_repo_id: str = "",
++    hf_path_in_repo: str = "",
++    hf_repo_type: str = "dataset",
++    hf_revision: str = "",
+ ) -> str | None:
+     """Ask the local reload watcher to reload pipeline-level HF exports."""
+     tpu_name = (os.environ.get("TMX_VLLM_RELOAD_TPU_NAME") or "").strip()
+@@ -540,7 +556,11 @@
+             pass
+ 
+     payload = {
+-        "gcs_model_path": gcs_model_path,
++        "gcs_model_path": gcs_model_path or "",
++        "hf_repo_id": hf_repo_id,
++        "hf_repo_type": hf_repo_type,
++        "hf_path_in_repo": hf_path_in_repo,
++        "hf_revision": hf_revision,
+         "stage": stage,
+         "step": 0,
+         "model_name": cfg.model_name,
+@@ -822,28 +842,35 @@
+     )
+     if sft_hf_dir is not None:
+         gcs_base = (os.environ.get("TMX_GCS_CHECKPOINT_BASE") or "").strip()
++        sft_hf_gcs = None
++        sft_hf_repo_id = _hf_artifact_repo()
++        sft_hf_path = f"{_hf_run_prefix(cfg)}/actual_sft_hf"
++        sft_hf_uploaded = False
++        if _env_flag("TMX_HF_MIRROR_FINAL_EXPORTS", "0"):
++            sft_hf_uploaded = _maybe_upload_path_to_hf(
++                sft_hf_dir,
++                cfg,
++                sft_hf_path,
++                is_dir=True,
++            )
+         if gcs_base:
+             sft_hf_gcs = _maybe_upload_dir_to_gcs(
+                 sft_hf_dir,
+                 f"{gcs_base.rstrip('/')}/actual_sft_hf",
+             )
+-            if sft_hf_gcs is not None:
+-                reloaded_urls = _maybe_reload_vllm_slice(
+-                    sft_hf_gcs,
+-                    cfg,
+-                    max_model_len=cfg.max_total_len,
+-                    max_num_seqs=int(os.environ.get("TMX_ACTUAL_GRPO_VLLM_MAX_NUM_SEQS", "32")),
+-                    stage="actual_sft",
+-                )
+-                if reloaded_urls:
+-                    actual_grpo_vllm_urls = reloaded_urls
+-        if _env_flag("TMX_HF_MIRROR_FINAL_EXPORTS", "0"):
+-            _maybe_upload_path_to_hf(
+-                sft_hf_dir,
++        if sft_hf_gcs is not None or sft_hf_uploaded:
++            reloaded_urls = _maybe_reload_vllm_slice(
++                sft_hf_gcs,
+                 cfg,
+-                f"{_hf_run_prefix(cfg)}/actual_sft_hf",
+-                is_dir=True,
++                max_model_len=cfg.max_total_len,
++                max_num_seqs=int(os.environ.get("TMX_ACTUAL_GRPO_VLLM_MAX_NUM_SEQS", "32")),
++                stage="actual_sft",
++                hf_repo_id=sft_hf_repo_id if sft_hf_uploaded else "",
++                hf_path_in_repo=sft_hf_path if sft_hf_uploaded else "",
++                hf_repo_type="dataset",
+             )
++            if reloaded_urls:
++                actual_grpo_vllm_urls = reloaded_urls
+ 
+     if _env_flag("TMX_PIPELINE_CLEAR_MEMORY_BEFORE_ACTUAL", "1"):
+         # Actual GRPO loads the SFT checkpoint and keeps a reference-policy
+@@ -890,6 +917,10 @@
+     })
+ 
+     actual_hf_gcs = None
++    actual_hf_uploaded = False
++    actual_hf_repo_id = ""
++    actual_hf_path = ""
++    actual_source_checkpoint = None
+     actual_hf_dir = _maybe_export_state_to_hf_dir(
+         actual_state,
+         actual_grpo_cfg,
+@@ -897,48 +928,59 @@
+     )
+     if actual_hf_dir is not None:
+         gcs_base = (os.environ.get("TMX_GCS_CHECKPOINT_BASE") or "").strip()
++        actual_hf_repo_id = _hf_artifact_repo()
++        actual_hf_path = f"{_hf_run_prefix(cfg)}/actual_hf_final"
++        if _env_flag("TMX_HF_MIRROR_FINAL_EXPORTS", "0"):
++            actual_hf_uploaded = _maybe_upload_path_to_hf(
++                actual_hf_dir,
++                cfg,
++                actual_hf_path,
++                is_dir=True,
++            )
+         if gcs_base:
+             actual_hf_gcs = _maybe_upload_dir_to_gcs(
+                 actual_hf_dir,
+                 f"{gcs_base.rstrip('/')}/actual_hf_final",
+             )
+-            if actual_hf_gcs is not None:
+-                if _env_flag("TMX_SKIP_FINAL_EVAL", "0"):
+-                    print(
+-                        f"[pipeline] TMX_SKIP_FINAL_EVAL=1; saved Actual HF bundle at {actual_hf_gcs} and skipping AIME dispatch.",
+-                        flush=True,
+-                    )
+-                    _wandb_log_pipeline(
+-                        cfg,
+-                        {
+-                            "pipeline/actual_hf_final_saved": 1.0,
+-                            "pipeline/final_eval_skipped": 1.0,
+-                        },
+-                    )
+-                    _write_run_summary(root_output_dir, cfg, "actual_hf_final", {
+-                        "status": "saved",
+-                        "gcs_path": actual_hf_gcs,
+-                        "final_eval_skipped": True,
+-                    })
+-                    return
+-                final_urls = _maybe_reload_vllm_slice(
+-                    actual_hf_gcs,
++        actual_source_checkpoint = actual_hf_gcs or (
++            f"hf://{actual_hf_repo_id}/{actual_hf_path}" if actual_hf_uploaded else actual_hf_dir
++        )
++        if actual_hf_gcs is not None or actual_hf_uploaded:
++            if _env_flag("TMX_SKIP_FINAL_EVAL", "0"):
++                print(
++                    f"[pipeline] TMX_SKIP_FINAL_EVAL=1; saved Actual HF bundle at {actual_source_checkpoint} and skipping AIME dispatch.",
++                    flush=True,
++                )
++                _wandb_log_pipeline(
+                     cfg,
+-                    max_model_len=int(os.environ.get("TMX_FINAL_EVAL_MAX_MODEL_LEN", "40960")),
+-                    max_num_seqs=int(os.environ.get("TMX_FINAL_EVAL_VLLM_MAX_NUM_SEQS", "4")),
+-                    stage="actual_final",
++                    {
++                        "pipeline/actual_hf_final_saved": 1.0,
++                        "pipeline/final_eval_skipped": 1.0,
++                    },
+                 )
+-                if final_urls:
+-                    os.environ["TMX_ACTUAL_VLLM_SERVER_URLS"] = final_urls
+-                else:
+-                    _maybe_reload_actual_vllm(actual_hf_gcs)
+-        if _env_flag("TMX_HF_MIRROR_FINAL_EXPORTS", "0"):
+-            _maybe_upload_path_to_hf(
+-                actual_hf_dir,
++                _write_run_summary(root_output_dir, cfg, "actual_hf_final", {
++                    "status": "saved",
++                    "gcs_path": actual_hf_gcs,
++                    "hf_repo_id": actual_hf_repo_id if actual_hf_uploaded else "",
++                    "hf_path_in_repo": actual_hf_path if actual_hf_uploaded else "",
++                    "source_checkpoint": actual_source_checkpoint,
++                    "final_eval_skipped": True,
++                })
++                return
++            final_urls = _maybe_reload_vllm_slice(
++                actual_hf_gcs,
+                 cfg,
+-                f"{_hf_run_prefix(cfg)}/actual_hf_final",
+-                is_dir=True,
++                max_model_len=int(os.environ.get("TMX_FINAL_EVAL_MAX_MODEL_LEN", "40960")),
++                max_num_seqs=int(os.environ.get("TMX_FINAL_EVAL_VLLM_MAX_NUM_SEQS", "4")),
++                stage="actual_final",
++                hf_repo_id=actual_hf_repo_id if actual_hf_uploaded else "",
++                hf_path_in_repo=actual_hf_path if actual_hf_uploaded else "",
++                hf_repo_type="dataset",
+             )
++            if final_urls:
++                os.environ["TMX_ACTUAL_VLLM_SERVER_URLS"] = final_urls
++            elif actual_hf_gcs:
++                _maybe_reload_actual_vllm(actual_hf_gcs)
+ 
+     # Stage 5: AIME24 benchmark eval
+     from .generate import parse_server_urls
+@@ -997,7 +1039,7 @@
+         "top_p": float(eval_top_p),
+         "top_k": int(eval_top_k),
+         "enable_thinking": cfg.enable_thinking,
+-        "source_checkpoint": actual_hf_gcs or actual_hf_dir,
++        "source_checkpoint": actual_source_checkpoint or actual_hf_gcs or actual_hf_dir,
+         "official_baseline": OFFICIAL_QWEN3_17B_AIME24,
+     }
+     out = os.path.join(root_output_dir, "final_eval_aime24.json")
+--- a/tmx_jax/scripts/reload_vllm_worker_detached.sh
++++ b/tmx_jax/scripts/reload_vllm_worker_detached.sh
+@@ -1,7 +1,11 @@
+ #!/usr/bin/env bash
+ set -euo pipefail
+ 
+-GCS_MODEL_PATH="${GCS_MODEL_PATH:?Must set GCS_MODEL_PATH}"
++GCS_MODEL_PATH="${GCS_MODEL_PATH:-}"
++HF_REPO_ID="${HF_REPO_ID:-}"
++HF_REPO_TYPE="${HF_REPO_TYPE:-dataset}"
++HF_PATH_IN_REPO="${HF_PATH_IN_REPO:-}"
++HF_REVISION="${HF_REVISION:-}"
+ WORKER_ID="${WORKER_ID:?Must set WORKER_ID}"
+ LOCAL_MODEL_DIR_BASENAME="${LOCAL_MODEL_DIR_BASENAME:-tmx_vllm_model}"
+ LOCAL_MODEL_DIR="/tmp/${LOCAL_MODEL_DIR_BASENAME}_w${WORKER_ID}"
+@@ -20,8 +24,18 @@
+ LOG_FILE="${LOG_FILE:-$HOME/vllm_reload_worker.log}"
+ MODEL_IMPL_TYPE="${MODEL_IMPL_TYPE:-auto}"
+ 
++if [ -z "$GCS_MODEL_PATH" ] && { [ -z "$HF_REPO_ID" ] || [ -z "$HF_PATH_IN_REPO" ]; }; then
++  echo "[reload-worker] ERROR: set either GCS_MODEL_PATH or HF_REPO_ID+HF_PATH_IN_REPO" >&2
++  exit 2
++fi
++
+ exec > >(tee -a "$LOG_FILE") 2>&1
+-echo "[reload-worker] start $(date -Is) worker=$WORKER_ID model=$GCS_MODEL_PATH local=$LOCAL_MODEL_DIR"
++if [ -n "$HF_REPO_ID" ] && [ -n "$HF_PATH_IN_REPO" ]; then
++  MODEL_SOURCE="hf://${HF_REPO_ID}/${HF_PATH_IN_REPO}"
++else
++  MODEL_SOURCE="$GCS_MODEL_PATH"
++fi
++echo "[reload-worker] start $(date -Is) worker=$WORKER_ID model=$MODEL_SOURCE local=$LOCAL_MODEL_DIR"
+ 
+ pkill -9 -f "[g]cloud.*storage cp" 2>/dev/null || true
+ pkill -9 -f "[v]llm serve" 2>/dev/null || true
+@@ -37,7 +51,50 @@
+ export CLOUDSDK_STORAGE_PROCESS_COUNT="${CLOUDSDK_STORAGE_PROCESS_COUNT:-1}"
+ export CLOUDSDK_STORAGE_THREAD_COUNT="${CLOUDSDK_STORAGE_THREAD_COUNT:-1}"
+ export CLOUDSDK_STORAGE_SLICED_OBJECT_DOWNLOAD_THRESHOLD="${CLOUDSDK_STORAGE_SLICED_OBJECT_DOWNLOAD_THRESHOLD:-150G}"
+-gcloud storage cp --recursive "${GCS_MODEL_PATH%/}/*" "$STAGING_DIR/"
++if [ -n "$HF_REPO_ID" ] && [ -n "$HF_PATH_IN_REPO" ]; then
++  export STAGING_DIR HF_REPO_ID HF_REPO_TYPE HF_PATH_IN_REPO HF_REVISION
++  "$VLLM_VENV_DIR/bin/python" - <<'PY'
++import os
++import shutil
++from pathlib import Path
++
++from huggingface_hub import snapshot_download
++
++repo_id = os.environ["HF_REPO_ID"]
++repo_type = os.environ.get("HF_REPO_TYPE") or "dataset"
++subpath = os.environ["HF_PATH_IN_REPO"].strip("/")
++revision = os.environ.get("HF_REVISION") or None
++staging = Path(os.environ["STAGING_DIR"])
++tmp = staging.parent / (staging.name + ".hf_download")
++
++shutil.rmtree(tmp, ignore_errors=True)
++tmp.mkdir(parents=True, exist_ok=True)
++snapshot_download(
++    repo_id=repo_id,
++    repo_type=repo_type,
++    revision=revision,
++    allow_patterns=[subpath + "/*"],
++    local_dir=str(tmp),
++)
++src = tmp / subpath
++if not src.exists():
++    matches = list(tmp.rglob("model.safetensors"))
++    if not matches:
++        raise FileNotFoundError(f"missing HF subpath {subpath!r} and model.safetensors")
++    src = matches[0].parent
++for child in src.iterdir():
++    dst = staging / child.name
++    if dst.exists():
++        if dst.is_dir():
++            shutil.rmtree(dst)
++        else:
++            dst.unlink()
++    shutil.move(str(child), str(dst))
++shutil.rmtree(tmp, ignore_errors=True)
++PY
++else
++  gcloud storage cp --recursive "${GCS_MODEL_PATH%/}/*" "$STAGING_DIR/"
++fi
+ test -s "$STAGING_DIR/model.safetensors"
+ rm -rf "$LOCAL_MODEL_DIR"
+ mv "$STAGING_DIR" "$LOCAL_MODEL_DIR"
+--- a/tmx_jax/scripts/reload_vllm_direct_slice.sh
++++ b/tmx_jax/scripts/reload_vllm_direct_slice.sh
+@@ -1,12 +1,17 @@
+ #!/usr/bin/env bash
+-# Reload vLLM-TPU workers from an HF model bundle in GCS.
++# Reload vLLM-TPU workers from an HF model bundle in Hugging Face or GCS.
+ #
+ # Large model copies can outlive or destabilize a single long TPU SSH command.
+ # This script therefore installs a small detached worker-side reloader, starts it
+ # with nohup, and polls worker health through short SSH calls.
+ set -euo pipefail
+ 
+-GCS_MODEL_PATH="${GCS_MODEL_PATH:?Must set GCS_MODEL_PATH}"
++GCS_MODEL_PATH="${GCS_MODEL_PATH:-}"
++HF_REPO_ID="${HF_REPO_ID:-}"
++HF_REPO_TYPE="${HF_REPO_TYPE:-dataset}"
++HF_PATH_IN_REPO="${HF_PATH_IN_REPO:-}"
++HF_REVISION="${HF_REVISION:-}"
++HF_TOKEN="${HF_TOKEN:-}"
+ TPU_NAME="${TPU_NAME:?Must set TPU_NAME}"
+ ZONE="${ZONE:?Must set ZONE}"
+ TPU_PROJECT="${TPU_PROJECT:-${CLOUDSDK_CORE_PROJECT:-}}"
+@@ -34,6 +39,15 @@
+ POLL_SECONDS="${POLL_SECONDS:-10}"
+ MANUAL_RELOAD_MARKER="/tmp/tmx_manual_reload_${LOCAL_MODEL_DIR_BASENAME}.done"
+ 
++if [ -z "$GCS_MODEL_PATH" ] && { [ -z "$HF_REPO_ID" ] || [ -z "$HF_PATH_IN_REPO" ]; }; then
++  echo "[reload-direct] ERROR: set either GCS_MODEL_PATH or HF_REPO_ID+HF_PATH_IN_REPO" >&2
++  exit 2
++fi
++
++if [ -z "$HF_TOKEN" ] && [ -f "$HOME/.cache/huggingface/token" ]; then
++  HF_TOKEN="$(tr -d '\n' < "$HOME/.cache/huggingface/token")"
++fi
++
+ if [ "${TMX_VLLM_RELOAD_ALLOW_PARALLEL:-0}" != "1" ] && [ "${PARALLELISM}" -gt 1 ]; then
+   # Parallel IAP SSH to TPU workers is flaky enough to strand full pipeline
+   # runs. Launch reload workers serially; the detached worker-side copies still
+@@ -113,6 +127,11 @@
+ rm -f ${log_file}
+ nohup env \\
+   GCS_MODEL_PATH='${GCS_MODEL_PATH}' \\
++  HF_REPO_ID='${HF_REPO_ID}' \\
++  HF_REPO_TYPE='${HF_REPO_TYPE}' \\
++  HF_PATH_IN_REPO='${HF_PATH_IN_REPO}' \\
++  HF_REVISION='${HF_REVISION}' \\
++  HF_TOKEN='${HF_TOKEN}' \\
+   WORKER_ID='${worker}' \\
+   LOCAL_MODEL_DIR_BASENAME='${LOCAL_MODEL_DIR_BASENAME}' \\
+   SERVED_MODEL_NAME='${SERVED_MODEL_NAME}' \\
+--- a/tmx_jax/scripts/external_vllm_reload_watcher.sh
++++ b/tmx_jax/scripts/external_vllm_reload_watcher.sh
+@@ -184,6 +184,10 @@
+     fi
+ 
+     gcs_model_path="$(json_get "$tmp_json" gcs_model_path)"
++    hf_repo_id="$(json_get "$tmp_json" hf_repo_id)"
++    hf_repo_type="$(json_get "$tmp_json" hf_repo_type)"
++    hf_path_in_repo="$(json_get "$tmp_json" hf_path_in_repo)"
++    hf_revision="$(json_get "$tmp_json" hf_revision)"
+     tpu_name="$(json_get "$tmp_json" tpu_name)"
+     tpu_project="$(json_get "$tmp_json" tpu_project)"
+     zone="$(json_get "$tmp_json" zone)"
+@@ -192,8 +196,17 @@
+     model_name="$(json_get "$tmp_json" model_name)"
+     max_model_len="$(json_get "$tmp_json" max_model_len)"
+     stage="$(json_get "$tmp_json" stage)"
+-    if [ -z "$gcs_model_path" ] || [ -z "$tpu_name" ] || [ -z "$zone" ] || [ -z "$workers" ]; then
+-      mark_remote "$last_error_path" "invalid reload request: missing gcs_model_path/tpu_name/zone/workers"
++    if [ -z "$hf_repo_type" ]; then
++      hf_repo_type="dataset"
++    fi
++    if [ -z "$gcs_model_path" ] && { [ -z "$hf_repo_id" ] || [ -z "$hf_path_in_repo" ]; }; then
++      mark_remote "$last_error_path" "invalid reload request: missing artifact source; need gcs_model_path or hf_repo_id+hf_path_in_repo"
++      log "invalid reload request $request_path; missing artifact source"
++      rm -f "$tmp_json" "$tmp_log"
++      continue
++    fi
++    if [ -z "$tpu_name" ] || [ -z "$zone" ] || [ -z "$workers" ]; then
++      mark_remote "$last_error_path" "invalid reload request: missing tpu_name/zone/workers"
+       log "invalid reload request $request_path; missing required fields"
+       rm -f "$tmp_json" "$tmp_log"
+       continue
+@@ -210,10 +223,18 @@
+         || echo 1
+     )"
+ 
+-    log "reloading stage=$stage attempt=$attempt gcs=$gcs_model_path workers=[$workers]"
++    if [ -n "$hf_repo_id" ] && [ -n "$hf_path_in_repo" ]; then
++      log "reloading stage=$stage attempt=$attempt hf=${hf_repo_id}/${hf_path_in_repo} workers=[$workers]"
++    else
++      log "reloading stage=$stage attempt=$attempt gcs=$gcs_model_path workers=[$workers]"
++    fi
+     if (
+       cd "$REPO_ROOT"
+       GCS_MODEL_PATH="$gcs_model_path" \
++      HF_REPO_ID="$hf_repo_id" \
++      HF_REPO_TYPE="$hf_repo_type" \
++      HF_PATH_IN_REPO="$hf_path_in_repo" \
++      HF_REVISION="$hf_revision" \
+       TPU_NAME="$tpu_name" \
+       TPU_PROJECT="$tpu_project" \
+       ZONE="$zone" \

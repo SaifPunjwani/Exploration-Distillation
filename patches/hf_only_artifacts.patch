@@ -1,0 +1,189 @@
+--- a/tmx_jax/train.py	2026-04-27 16:23:47
++++ b/tmx_jax/train.py	2026-04-29 05:17:58
+@@ -1862,6 +1862,16 @@
+ def _upload_trajectory_file(cfg: TrainConfig, local_path: str, target_names: Tuple[str, ...]) -> None:
+     if not os.path.exists(local_path):
+         return
++    if _hf_only_artifacts():
++        for target_name in target_names:
++            _maybe_upload_path_to_hf(
++                local_path,
++                cfg,
++                f"{_hf_run_prefix(cfg)}/{_stage_name_for_output(cfg)}/trajectories/{target_name}",
++                is_dir=False,
++            )
++        print(f"[ckpt] uploaded trajectory snapshot to HF ({len(target_names)} names)", flush=True)
++        return
+     gcs_dir = _trajectory_gcs_dir(cfg)
+     for target_name in target_names:
+         ret = subprocess.run(
+@@ -2581,7 +2591,7 @@
+ 
+         gcs_base = (os.environ.get("TMX_GCS_CHECKPOINT_BASE") or "").strip().rstrip("/")
+         target = ""
+-        if gcs_base:
++        if gcs_base and not _hf_only_artifacts():
+             target = f"{gcs_base}/eval_probes/{os.path.basename(probe_path)}"
+             subprocess.run(["gcloud", "storage", "cp", probe_path, target], check=False, timeout=900)
+         if _env_flag("TMX_HF_MIRROR_EVAL_PROBES", "0"):
+@@ -3860,6 +3870,8 @@
+ 
+ 
+ def _gcs_checkpoint_target(ckpt_dir: str, cfg: TrainConfig) -> str:
++    if _hf_only_artifacts():
++        raise RuntimeError("GCS checkpoint target requested while TMX_ARTIFACT_BACKEND=hf")
+     gcs_base = os.environ.get("TMX_GCS_CHECKPOINT_BASE", "").strip()
+     if not gcs_base:
+         gcs_base = "gs://two-model-exploration-checkpoints/checkpoints"
+@@ -3906,6 +3918,19 @@
+         payload["opt_state"] = state.opt_state
+     if rnd_state is not None:
+         payload["rnd_state"] = _checkpoint_safe_host_tree(rnd_state)
++    if upload_to_gcs and _hf_only_artifacts() and jax.process_count() > 1:
++        # HF is object storage, not the shared filesystem that Orbax direct-GCS
++        # relied on. Durable HF model bundles are exported/reloaded separately;
++        # this prevents accidental bucket writes on multi-host runs.
++        print(
++            "[ckpt] HF-only artifact mode: skipping multihost Orbax/GCS checkpoint; "
++            "uploading trajectories/metrics and relying on HF model exports",
++            flush=True,
++        )
++        _maybe_upload_trajectory_snapshot(cfg, step)
++        _maybe_upload_training_metrics_snapshot(cfg, step)
++        _prune_local_checkpoints(cfg, keep_last)
++        return
+     direct_gcs = (
+         upload_to_gcs
+         and jax.process_count() > 1
+@@ -4041,6 +4066,17 @@
+ def _hf_run_prefix(cfg: TrainConfig) -> str:
+     default = os.path.basename(os.path.abspath(cfg.output_dir.rstrip("/")))
+     return (os.environ.get("TMX_HF_ARTIFACT_PREFIX") or default).strip().strip("/")
++
++
++def _hf_only_artifacts() -> bool:
++    backend = (os.environ.get("TMX_ARTIFACT_BACKEND") or "hf").strip().lower()
++    allow_gcs = os.environ.get("TMX_ALLOW_GCS_ARTIFACTS", "0").strip().lower() in (
++        "1",
++        "true",
++        "yes",
++        "on",
++    )
++    return backend == "hf" or not allow_gcs
+ 
+ 
+ _HF_LOCAL_UPLOAD_CODE = r"""
+@@ -4225,6 +4261,34 @@
+     traj = os.path.join(cfg.output_dir, "explorer_trajectories.jsonl")
+     if not os.path.exists(traj):
+         return
++    target_names = (
++        f"explorer_trajectories_step_{step:06d}.jsonl",
++        "explorer_trajectories_latest.jsonl",
++        f"rollouts_step_{step:06d}.jsonl",
++        "rollouts_latest.jsonl",
++    )
++    if _hf_only_artifacts():
++        for target_name in target_names:
++            _maybe_upload_path_to_hf(
++                traj,
++                cfg,
++                f"{_hf_run_prefix(cfg)}/{_stage_name_for_output(cfg)}/trajectories/{target_name}",
++                is_dir=False,
++            )
++        all_rollouts = os.path.join(cfg.output_dir, "rollouts_all.jsonl")
++        if os.path.exists(all_rollouts):
++            for target_name in (
++                f"rollouts_all_step_{step:06d}.jsonl",
++                "rollouts_all_latest.jsonl",
++            ):
++                _maybe_upload_path_to_hf(
++                    all_rollouts,
++                    cfg,
++                    f"{_hf_run_prefix(cfg)}/{_stage_name_for_output(cfg)}/trajectories/{target_name}",
++                    is_dir=False,
++                )
++        print("[ckpt] uploaded trajectory snapshot to HF", flush=True)
++        return
+     gcs_base = os.environ.get("TMX_GCS_CHECKPOINT_BASE", "").strip()
+     if not gcs_base:
+         gcs_base = "gs://two-model-exploration-checkpoints/checkpoints"
+@@ -4235,12 +4299,6 @@
+     else:
+         gcs_dir = f"{gcs_base}/{run_name}/trajectories"
+     try:
+-        target_names = (
+-            f"explorer_trajectories_step_{step:06d}.jsonl",
+-            "explorer_trajectories_latest.jsonl",
+-            f"rollouts_step_{step:06d}.jsonl",
+-            "rollouts_latest.jsonl",
+-        )
+         for target_name in target_names:
+             ret = subprocess.run(
+                 ["gsutil", "cp", traj, f"{gcs_dir}/{target_name}"],
+@@ -4289,6 +4347,20 @@
+     metrics = os.path.join(cfg.output_dir, "training_metrics.jsonl")
+     if not os.path.exists(metrics):
+         return
++    target_names = (
++        f"training_metrics_step_{step:06d}.jsonl",
++        "training_metrics_latest.jsonl",
++    )
++    if _hf_only_artifacts():
++        for target_name in target_names:
++            _maybe_upload_path_to_hf(
++                metrics,
++                cfg,
++                f"{_hf_run_prefix(cfg)}/{_stage_name_for_output(cfg)}/metrics/{target_name}",
++                is_dir=False,
++            )
++        print("[ckpt] uploaded training metrics snapshot to HF", flush=True)
++        return
+     gcs_base = os.environ.get("TMX_GCS_CHECKPOINT_BASE", "").strip()
+     if not gcs_base:
+         gcs_base = "gs://two-model-exploration-checkpoints/checkpoints"
+@@ -4298,10 +4370,7 @@
+         gcs_dir = f"{gcs_base}/metrics"
+     else:
+         gcs_dir = f"{gcs_base}/{run_name}/metrics"
+-    for target_name in (
+-        f"training_metrics_step_{step:06d}.jsonl",
+-        "training_metrics_latest.jsonl",
+-    ):
++    for target_name in target_names:
+         try:
+             ret = subprocess.run(
+                 ["gsutil", "cp", metrics, f"{gcs_dir}/{target_name}"],
+--- a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh	2026-04-27 05:15:59
++++ b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh	2026-04-29 05:18:10
+@@ -72,7 +72,9 @@
+ MAX_ACCEPTED_TRAJECTORIES="${MAX_ACCEPTED_TRAJECTORIES:-0}"
+ ACCEPTED_SELECTION_POLICY="${ACCEPTED_SELECTION_POLICY:-quality_first}"
+ TPU_ACCELERATOR_TYPE="${TPU_ACCELERATOR_TYPE:-v5litepod-64}"
+-TMX_GCS_CHECKPOINT_BASE="${TMX_GCS_CHECKPOINT_BASE:-gs://two-model-exploration-checkpoints/${RUN_NAME}}"
++TMX_ARTIFACT_BACKEND="${TMX_ARTIFACT_BACKEND:-hf}"
++TMX_ALLOW_GCS_ARTIFACTS="${TMX_ALLOW_GCS_ARTIFACTS:-0}"
++TMX_GCS_CHECKPOINT_BASE="${TMX_GCS_CHECKPOINT_BASE:-}"
+ VLLM_URLS_OVERRIDE="${TMX_VLLM_SERVER_URLS:-${VLLM_SERVER_URLS:-}}"
+ VLLM_RELOAD_TPU_NAME="${VLLM_RELOAD_TPU_NAME:-$TPU_NAME}"
+ VLLM_RELOAD_TPU_PROJECT="${VLLM_RELOAD_TPU_PROJECT:-${TMX_VLLM_RELOAD_TPU_PROJECT:-${TPU_PROJECT:-${CLOUDSDK_CORE_PROJECT:-}}}}"
+@@ -233,11 +235,15 @@
+ export TMX_SAVE_OPT_STATE="\${TMX_SAVE_OPT_STATE:-0}"
+ export TMX_CKPT_DELETE_OLD_RUNS="\${TMX_CKPT_DELETE_OLD_RUNS:-1}"
+ export TMX_LOCAL_CHECKPOINT_EVERY_STEPS="\${TMX_LOCAL_CHECKPOINT_EVERY_STEPS:-0}"
+-export TMX_GCS_CHECKPOINT_EVERY_STEPS='${TMX_GCS_CHECKPOINT_EVERY_STEPS:-${SAVE_EVERY_STEPS}}'
+-export TMX_GCS_CHECKPOINT_FIRST_STEP='${TMX_GCS_CHECKPOINT_FIRST_STEP:-0}'
+-export TMX_ORBAX_DIRECT_GCS_CHECKPOINT="\${TMX_ORBAX_DIRECT_GCS_CHECKPOINT:-1}"
++export TMX_HF_CHECKPOINT_EVERY_STEPS='${TMX_HF_CHECKPOINT_EVERY_STEPS:-${TMX_GCS_CHECKPOINT_EVERY_STEPS:-${SAVE_EVERY_STEPS}}}'
++export TMX_HF_CHECKPOINT_FIRST_STEP='${TMX_HF_CHECKPOINT_FIRST_STEP:-${TMX_GCS_CHECKPOINT_FIRST_STEP:-0}}'
++export TMX_GCS_CHECKPOINT_EVERY_STEPS="\${TMX_GCS_CHECKPOINT_EVERY_STEPS:-\$TMX_HF_CHECKPOINT_EVERY_STEPS}"
++export TMX_GCS_CHECKPOINT_FIRST_STEP="\${TMX_GCS_CHECKPOINT_FIRST_STEP:-\$TMX_HF_CHECKPOINT_FIRST_STEP}"
++export TMX_ARTIFACT_BACKEND='${TMX_ARTIFACT_BACKEND}'
++export TMX_ALLOW_GCS_ARTIFACTS='${TMX_ALLOW_GCS_ARTIFACTS}'
++export TMX_ORBAX_DIRECT_GCS_CHECKPOINT="\${TMX_ORBAX_DIRECT_GCS_CHECKPOINT:-0}"
+ export TMX_SKIP_MULTIHOST_LOCAL_ONLY_CHECKPOINT="\${TMX_SKIP_MULTIHOST_LOCAL_ONLY_CHECKPOINT:-1}"
+-export TMX_REQUIRE_GCS_CHECKPOINT_UPLOAD="\${TMX_REQUIRE_GCS_CHECKPOINT_UPLOAD:-1}"
++export TMX_REQUIRE_GCS_CHECKPOINT_UPLOAD="\${TMX_REQUIRE_GCS_CHECKPOINT_UPLOAD:-0}"
+ export TMX_LOCAL_CHECKPOINT_KEEP_LAST="\${TMX_LOCAL_CHECKPOINT_KEEP_LAST:-1}"
+ export TMX_LOCAL_VLLM_RELOAD_KEEP_LAST="\${TMX_LOCAL_VLLM_RELOAD_KEEP_LAST:-0}"
+ export TMX_DELETE_LOCAL_VLLM_RELOAD_AFTER_UPLOAD="\${TMX_DELETE_LOCAL_VLLM_RELOAD_AFTER_UPLOAD:-1}"

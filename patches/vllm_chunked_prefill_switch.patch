@@ -1,0 +1,62 @@
+diff --git a/tmx_jax/scripts/bootstrap_vllm_slice.sh b/tmx_jax/scripts/bootstrap_vllm_slice.sh
+--- a/tmx_jax/scripts/bootstrap_vllm_slice.sh
++++ b/tmx_jax/scripts/bootstrap_vllm_slice.sh
+@@ -14,11 +14,12 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-65536}"
+ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+ VLLM_TPU_BUCKET_PADDING_GAP="${VLLM_TPU_BUCKET_PADDING_GAP:-}"
+ VLLM_TPU_MOST_MODEL_LEN="${VLLM_TPU_MOST_MODEL_LEN:-}"
+ VLLM_XLA_CACHE_PATH="${VLLM_XLA_CACHE_PATH:-}"
+ DISABLE_LOG_REQUESTS="${DISABLE_LOG_REQUESTS:-1}"
+ VLLM_USE_V1="${VLLM_USE_V1:-0}"
++VLLM_ENABLE_CHUNKED_PREFILL="${VLLM_ENABLE_CHUNKED_PREFILL:-1}"
+ VLLM_ENV_CACHE_GCS_URI="${VLLM_ENV_CACHE_GCS_URI:-gs://two-model-exploration-checkpoints/shared_envs/v5lite_vllm_tpu_0.13.3_py311.tar.gz}"
+ LAUNCH_RETRIES="${TMX_VLLM_BOOTSTRAP_RETRIES:-4}"
+ LAUNCH_RETRY_SLEEP="${TMX_VLLM_BOOTSTRAP_RETRY_SLEEP:-8}"
+ 
+ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+@@ -71,8 +72,9 @@ for w in $WORKERS; do
+         VLLM_TPU_BUCKET_PADDING_GAP='$VLLM_TPU_BUCKET_PADDING_GAP' \
+         VLLM_TPU_MOST_MODEL_LEN='$VLLM_TPU_MOST_MODEL_LEN' \
+         VLLM_XLA_CACHE_PATH='$VLLM_XLA_CACHE_PATH' \
+         DISABLE_LOG_REQUESTS='$DISABLE_LOG_REQUESTS' \
+         VLLM_USE_V1='$VLLM_USE_V1' \
++        VLLM_ENABLE_CHUNKED_PREFILL='$VLLM_ENABLE_CHUNKED_PREFILL' \
+         VLLM_ENV_CACHE_GCS_URI='$VLLM_ENV_CACHE_GCS_URI' \
+         bash ~/bootstrap_vllm_worker.sh
+       " >/dev/null; then
+diff --git a/tmx_jax/scripts/bootstrap_vllm_worker.sh b/tmx_jax/scripts/bootstrap_vllm_worker.sh
+--- a/tmx_jax/scripts/bootstrap_vllm_worker.sh
++++ b/tmx_jax/scripts/bootstrap_vllm_worker.sh
+@@ -16,10 +16,11 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.85}"
+ VLLM_TPU_BUCKET_PADDING_GAP="${VLLM_TPU_BUCKET_PADDING_GAP:-}"
+ VLLM_TPU_MOST_MODEL_LEN="${VLLM_TPU_MOST_MODEL_LEN:-}"
+ VLLM_XLA_CACHE_PATH="${VLLM_XLA_CACHE_PATH:-$HOME/.cache/vllm/xla_cache}"
+ DISABLE_LOG_REQUESTS="${DISABLE_LOG_REQUESTS:-1}"
+ VLLM_USE_V1="${VLLM_USE_V1:-0}"
++VLLM_ENABLE_CHUNKED_PREFILL="${VLLM_ENABLE_CHUNKED_PREFILL:-1}"
+ if [ -z "${TPU_VISIBLE_CHIPS:-}" ]; then
+   if [ "$TP" = "1" ]; then
+     TPU_VISIBLE_CHIPS="0"
+   else
+     TPU_VISIBLE_CHIPS="0,1,2,3"
+@@ -109,16 +110,18 @@ fi
+ mkdir -p "\$VLLM_XLA_CACHE_PATH"
+ extra_args=()
+ if [ "$DISABLE_LOG_REQUESTS" != "0" ]; then
+   extra_args+=(--disable-log-requests)
+ fi
++if [ "$VLLM_ENABLE_CHUNKED_PREFILL" != "0" ]; then
++  extra_args+=(--enable-chunked-prefill)
++fi
+ exec "$VLLM_VENV_DIR/bin/vllm" serve "$MODEL" \\
+   --host 0.0.0.0 --port "$PORT" \\
+   --tensor-parallel-size "$TP" \\
+   --dtype bfloat16 \\
+   --max-model-len "$MAX_MODEL_LEN" \\
+   --max-num-seqs "$MAX_NUM_SEQS" \\
+   --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \\
+   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \\
+-  --enable-chunked-prefill \\
+   --served-model-name "$MODEL" \\
+   "\${extra_args[@]}"
+ EOF

@@ -1,0 +1,38 @@
+diff --git a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+index 0000000..0000000 100755
+--- a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
++++ b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+@@ -333,8 +333,31 @@ for idx in "${!train_workers[@]}"; do
+     done
+     mkdir -p ~/runs/$RUN_NAME
+     chmod +x /tmp/${RUN_NAME}_w${w}.sh
+-    tmux new-session -d -s '${RUN_NAME}_w${w}' 'bash /tmp/${RUN_NAME}_w${w}.sh'
+-    tmux ls | grep '${RUN_NAME}_w${w}'
++    tmux_ok=0
++    if command -v tmux >/dev/null 2>&1; then
++      # Some TPU images leave a stale tmux socket and the server exits before
++      # listing sessions. Clear only this user's socket, then fall back to
++      # nohup if tmux is still unavailable.
++      rm -rf /tmp/tmux-\$(id -u) 2>/dev/null || true
++      if tmux new-session -d -s '${RUN_NAME}_w${w}' 'bash /tmp/${RUN_NAME}_w${w}.sh' \
++        2>~/runs/$RUN_NAME/tmux_start_w${w}.err; then
++        if tmux has-session -t '${RUN_NAME}_w${w}' 2>/dev/null; then
++          tmux_ok=1
++        fi
++      fi
++    fi
++    if [ "\$tmux_ok" != "1" ]; then
++      echo "[launch] tmux unavailable; falling back to nohup for worker ${w}" \
++        | tee -a ~/runs/$RUN_NAME/launcher_w${w}.log
++      nohup bash /tmp/${RUN_NAME}_w${w}.sh >~/runs/$RUN_NAME/nohup_w${w}.log 2>&1 < /dev/null &
++      echo \$! > ~/runs/$RUN_NAME/pid_w${w}.pid
++    fi
++    sleep 2
++    if ! tmux has-session -t '${RUN_NAME}_w${w}' 2>/dev/null \
++      && ! pgrep -af 'bash /tmp/${RUN_NAME}_w${w}.sh|python -m tmx_jax' >/dev/null 2>&1; then
++      echo "[launch] ERROR: worker ${w} did not stay alive" >&2
++      exit 1
++    fi
+   "
+   ) &
+   launch_pids+=("$!")

@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# Launch or resume a DAPO/Dr.GRPO/novelty JAX run on the TRC v5litepod-256.
+#
+# Safety properties:
+# - Uses only the existing TRC TPU VM. It never creates TPUs, routers, or NAT.
+# - Requires external IPs to be enabled via scripts/trc2_v5lite256_guard.sh.
+# - Uses one TPU pod only to avoid cross-region traffic and to keep all storage
+#   artifacts on Hugging Face.
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT_DIR"
+
+TRC2_PROJECT="${TRC2_PROJECT:?set TRC2_PROJECT to the GCP project id of the TRC allocation}"
+TRC2_ZONE="${TRC2_ZONE:-europe-west4-b}"
+TRC2_TPU_NAME="${TRC2_TPU_NAME:-trc2-v5lite256-ew4b-r1}"
+
+TMX_FRESH_RUN="${TMX_FRESH_RUN:-0}"
+SOURCE_RUN="${SOURCE_RUN:-dapo16k_drgrpo_novelty05_hf_resume49_20260429_174651_wandbresume_parallelvllm}"
+SOURCE_STEP="${SOURCE_STEP:-latest}"
+if [ "$TMX_FRESH_RUN" = "1" ]; then
+  SOURCE_STEP=""
+elif [ "$SOURCE_STEP" = "latest" ]; then
+  SOURCE_STEP="$(
+    SOURCE_RUN="$SOURCE_RUN" python3 - <<'PY'
+import os
+import re
+import sys
+
+from huggingface_hub import HfApi
+
+repo = os.environ.get("TMX_HF_CHECKPOINT_REPO", "SaifPunjwani/two-model-exploration-checkpoints")
+run = os.environ["SOURCE_RUN"]
+prefix = f"{run}/explorer/checkpoints/step_"
+try:
+    steps = []
+    for path in HfApi().list_repo_files(repo, repo_type="dataset"):
+        if not path.startswith(prefix):
+            continue
+        match = re.match(rf"{re.escape(prefix)}(\d{{6}})/", path)
+        if match:
+            steps.append(match.group(1))
+    if not steps:
+        raise RuntimeError(f"no HF checkpoints under {prefix}")
+    print(max(steps))
+except Exception as exc:
+    print(f"[trc256-launch] WARN failed to discover latest HF checkpoint: {exc}; falling back to 000060", file=sys.stderr)
+    print("000060")
+PY
+  )"
+fi
+if [ "$TMX_FRESH_RUN" = "1" ]; then
+  RUN_NAME="${RUN_NAME:-dapo16k_drgrpo_novelty075_trc256_fresh_$(date +%Y%m%d_%H%M%S)}"
+else
+  RUN_NAME="${RUN_NAME:-dapo16k_drgrpo_novelty05_trc256_resume${SOURCE_STEP}_$(date +%Y%m%d_%H%M%S)}"
+fi
+
+# Fast balanced partition for v5litepod-256:
+# 16 workers x 4 chips = 64 train chips
+# 48 workers x 4 chips = 192 rollout chips
+TRAIN_WORKERS="${TRAIN_WORKERS:-0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15}"
+SERVE_WORKERS="${SERVE_WORKERS:-16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63}"
+
+export TRC2_PROJECT TRC2_ZONE TRC2_TPU_NAME
+"$ROOT_DIR/scripts/trc2_v5lite256_guard.sh" "$@"
+
+export TPU_PROJECT="${TPU_PROJECT:-$TRC2_PROJECT}"
+export TRAIN_TPU_PROJECT="${TRAIN_TPU_PROJECT:-$TRC2_PROJECT}"
+export SERVE_TPU_PROJECT="${SERVE_TPU_PROJECT:-$TRC2_PROJECT}"
+export TRAIN_TPU_NAME="${TRAIN_TPU_NAME:-$TRC2_TPU_NAME}"
+export SERVE_TPU_NAME="${SERVE_TPU_NAME:-$TRC2_TPU_NAME}"
+export TRAIN_ZONE="${TRAIN_ZONE:-$TRC2_ZONE}"
+export SERVE_ZONE="${SERVE_ZONE:-$TRC2_ZONE}"
+export TRAIN_WORKERS SERVE_WORKERS
+export TMX_SINGLE_TPU_DISJOINT_TRAIN_SERVE="${TMX_SINGLE_TPU_DISJOINT_TRAIN_SERVE:-1}"
+export TMX_REQUIRE_SAME_REGION_TPU="${TMX_REQUIRE_SAME_REGION_TPU:-1}"
+export TMX_ALLOW_CROSS_REGION_TPU="${TMX_ALLOW_CROSS_REGION_TPU:-0}"
+
+export REMOTE_REPO="${REMOTE_REPO:?set REMOTE_REPO to the absolute repo path on every TPU worker}"
+export RUNS_ROOT="${RUNS_ROOT:?set RUNS_ROOT to the absolute runs directory on the TPU VM}"
+export MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-1.7B}"
+export RUN_NAME
+if [ "$TMX_FRESH_RUN" = "1" ]; then
+  export INIT_CHECKPOINT="${INIT_CHECKPOINT:-}"
+else
+  export INIT_CHECKPOINT="${INIT_CHECKPOINT:-hf://SaifPunjwani/two-model-exploration-checkpoints/${SOURCE_RUN}/explorer/checkpoints/step_${SOURCE_STEP}}"
+fi
+
+# Full DAPO/Dr.GRPO + novelty contract.
+export MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-2048}"
+export MAX_COMPLETION_LEN="${MAX_COMPLETION_LEN:-16384}"
+export MAX_TOTAL_LEN="${MAX_TOTAL_LEN:-18432}"
+export VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-$MAX_TOTAL_LEN}"
+export VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-$MAX_TOTAL_LEN}"
+export VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-1}"
+export VLLM_MAX_NUM_SEQS_CANDIDATES="${VLLM_MAX_NUM_SEQS_CANDIDATES:-1 2}"
+export VLLM_TP_SIZE="${VLLM_TP_SIZE:-4}"
+export VLLM_TP_SIZE_CANDIDATES="${VLLM_TP_SIZE_CANDIDATES:-4}"
+export VLLM_CONCURRENCY="${VLLM_CONCURRENCY:-192}"
+export VLLM_FANOUT_PER_PROMPT="${VLLM_FANOUT_PER_PROMPT:-16}"
+export TMX_ROLLOUT_BACKEND="${TMX_ROLLOUT_BACKEND:-adaptive_vllm_http}"
+export TMX_HTTP_POOL_MAXSIZE="${TMX_HTTP_POOL_MAXSIZE:-512}"
+export TMX_VLLM_HEALTH_FILTER_CONCURRENCY="${TMX_VLLM_HEALTH_FILTER_CONCURRENCY:-64}"
+export TMX_VLLM_HEALTH_FILTER_TTL_SECONDS="${TMX_VLLM_HEALTH_FILTER_TTL_SECONDS:-30}"
+export TMX_VLLM_ENDPOINT_MAX_INFLIGHT="${TMX_VLLM_ENDPOINT_MAX_INFLIGHT:-1}"
+export TMX_VLLM_FAILOVER_ON_ERROR="${TMX_VLLM_FAILOVER_ON_ERROR:-1}"
+export VLLM_ENABLE_CHUNKED_PREFILL="${VLLM_ENABLE_CHUNKED_PREFILL:-1}"
+export VLLM_TPU_BUCKET_PADDING_GAP="${VLLM_TPU_BUCKET_PADDING_GAP:-4096}"
+export VLLM_TPU_MOST_MODEL_LEN="${VLLM_TPU_MOST_MODEL_LEN:-$MAX_TOTAL_LEN}"
+export VLLM_V1_USE_PREFILL_DECODE_ATTENTION="${VLLM_V1_USE_PREFILL_DECODE_ATTENTION:-1}"
+export VLLM_XLA_CACHE_TAG="${VLLM_XLA_CACHE_TAG:-trc256_tp4_pda1_mlen${VLLM_MAX_MODEL_LEN}_mbt${VLLM_MAX_NUM_BATCHED_TOKENS}}"
+
+export GRPO_BATCH_SIZE="${GRPO_BATCH_SIZE:-1}"
+export GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-1}"
+export TMX_EXPECTED_GRPO_BATCH_SIZE="${TMX_EXPECTED_GRPO_BATCH_SIZE:-$GRPO_BATCH_SIZE}"
+export GRPO_NUM_GENERATIONS="${GRPO_NUM_GENERATIONS:-16}"
+export GRPO_MAX_STEPS="${GRPO_MAX_STEPS:-100}"
+export GRPO_UPDATES_PER_ROLLOUT="${GRPO_UPDATES_PER_ROLLOUT:-1}"
+export GRPO_LR="${GRPO_LR:-5e-6}"
+export GRPO_CLIP_EPSILON=0.2
+export GRPO_CLIP_EPSILON_HIGH=0.28
+export GRPO_KL_BETA=0.0
+export GRPO_ADVANTAGE_NORMALIZATION=none
+export TMX_EXPECTED_GRPO_GRAD_ACCUM="$GRPO_GRAD_ACCUM"
+export TMX_EXPECTED_GRPO_UPDATES_PER_ROLLOUT="$GRPO_UPDATES_PER_ROLLOUT"
+
+export DYNAMIC_SAMPLING=true
+export DYNAMIC_SAMPLING_MAX_ATTEMPTS="${DYNAMIC_SAMPLING_MAX_ATTEMPTS:-8}"
+export DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT="${DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT:-1}"
+export TMX_DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT="$DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT"
+export TMX_DYNAMIC_SAMPLING_ACCEPT_REWARD_VARIANCE="${TMX_DYNAMIC_SAMPLING_ACCEPT_REWARD_VARIANCE:-1}"
+export TMX_DYNAMIC_SAMPLING_MIN_REWARD_STD="${TMX_DYNAMIC_SAMPLING_MIN_REWARD_STD:-1e-6}"
+export MASK_TRUNCATED_COMPLETIONS=false
+export SOFT_OVERLONG_EXPECTED_LEN="${SOFT_OVERLONG_EXPECTED_LEN:-13107}"
+export SOFT_OVERLONG_CACHE_LEN="${SOFT_OVERLONG_CACHE_LEN:-3277}"
+
+export LAMBDA_NOVELTY="${LAMBDA_NOVELTY:-0.75}"
+export NOVELTY_FEATURE_SOURCE=multilayer
+export NOVELTY_LAYERS="${NOVELTY_LAYERS:-7,14,21}"
+export NOVELTY_LAYER_POOL=mean
+export NOVELTY_LAYER_AGG=mean
+export NOVELTY_METRIC=sqrt_mse
+export NOVELTY_TEXT_CONTRACT=full_raw
+export INCORRECT_NOVELTY_SCALE="${INCORRECT_NOVELTY_SCALE:-1.0}"
+export GATE_NOVELTY_BY_QUALITY=false
+export NOVELTY_FEATURE_MAX_LENGTH="$MAX_TOTAL_LEN"
+
+export REWARD_CORRECT=1.0
+export REWARD_INCORRECT=-1.0
+export FORMAT_PENALTY_WEIGHT=0.0
+export NONTERMINATION_PENALTY=0.0
+export INVALID_ANSWER_PENALTY=0.0
+
+# HF-only artifacts. Do not use GCS for training storage.
+export TMX_ARTIFACT_BACKEND=hf
+export TMX_ALLOW_GCS_ARTIFACTS=0
+export TMX_GCS_CHECKPOINT_BASE=
+export TMX_HF_CHECKPOINT_REPO="${TMX_HF_CHECKPOINT_REPO:-SaifPunjwani/two-model-exploration-checkpoints}"
+export TMX_HF_MODEL_REPO="${TMX_HF_MODEL_REPO:-SaifPunjwani/two-model-exploration-models}"
+export TMX_HF_DATASET_REPO="${TMX_HF_DATASET_REPO:-SaifPunjwani/two-model-exploration-checkpoints}"
+export TMX_HF_REPO_TYPE=dataset
+export TMX_HF_ARTIFACT_PREFIX="${TMX_HF_ARTIFACT_PREFIX:-$RUN_NAME}"
+export TMX_HF_CHECKPOINT_EVERY_STEPS="${TMX_HF_CHECKPOINT_EVERY_STEPS:-25}"
+export TMX_HF_CHECKPOINT_FIRST_STEP="${TMX_HF_CHECKPOINT_FIRST_STEP:-1}"
+export TMX_REQUIRE_HF_ARTIFACT_UPLOAD="${TMX_REQUIRE_HF_ARTIFACT_UPLOAD:-1}"
+export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
+export SAVE_EVERY_STEPS="${SAVE_EVERY_STEPS:-25}"
+export TMX_LOCAL_CHECKPOINT_EVERY_STEPS="${TMX_LOCAL_CHECKPOINT_EVERY_STEPS:-3}"
+export TMX_LOCAL_CHECKPOINT_KEEP_LAST="${TMX_LOCAL_CHECKPOINT_KEEP_LAST:-1}"
+export TMX_DELETE_LOCAL_VLLM_RELOAD_AFTER_UPLOAD="${TMX_DELETE_LOCAL_VLLM_RELOAD_AFTER_UPLOAD:-0}"
+export TMX_LOCAL_VLLM_RELOAD_KEEP_LAST="${TMX_LOCAL_VLLM_RELOAD_KEEP_LAST:-1}"
+export TMX_SAVE_OPT_STATE=0
+export TMX_RESTORE_OPT_STATE=0
+
+# Reload/probe cadence. On TRC we use direct same-pod reload so the first
+# rollout after resume is guaranteed to use the restored step checkpoint.
+export TMX_PREFETCH_ROLLOUTS=1
+export TMX_TRAIN_VLLM_RELOAD_EVERY_STEPS="${TMX_TRAIN_VLLM_RELOAD_EVERY_STEPS:-25}"
+if [ "$TMX_FRESH_RUN" = "1" ]; then
+  export TMX_TRAIN_VLLM_RELOAD_FIRST_STEP="${TMX_TRAIN_VLLM_RELOAD_FIRST_STEP:-25}"
+else
+  export TMX_TRAIN_VLLM_RELOAD_FIRST_STEP="${TMX_TRAIN_VLLM_RELOAD_FIRST_STEP:-60}"
+fi
+export TMX_TRAIN_VLLM_RELOAD_MODE="${TMX_TRAIN_VLLM_RELOAD_MODE:-direct}"
+export TMX_VLLM_RELOAD_TRANSPORT="${TMX_VLLM_RELOAD_TRANSPORT:-internal_http}"
+export TMX_HF_MIRROR_VLLM_EXPORTS="${TMX_HF_MIRROR_VLLM_EXPORTS:-1}"
+export TMX_EXTERNAL_VLLM_RELOAD_WAIT="${TMX_EXTERNAL_VLLM_RELOAD_WAIT:-1}"
+export TMX_EXTERNAL_VLLM_RELOAD_REQUIRED="${TMX_EXTERNAL_VLLM_RELOAD_REQUIRED:-1}"
+export TMX_EXTERNAL_VLLM_RELOAD_RETRY_ON_FAIL=0
+export TMX_VLLM_SKIP_FAILED_WORKERS=1
+export TMX_VLLM_RELOAD_MIN_HEALTHY_WORKERS="${TMX_VLLM_RELOAD_MIN_HEALTHY_WORKERS:-40}"
+export TMX_VLLM_RELOAD_ALLOW_PARALLEL="${TMX_VLLM_RELOAD_ALLOW_PARALLEL:-1}"
+export TMX_VLLM_RELOAD_PARALLELISM="${TMX_VLLM_RELOAD_PARALLELISM:-8}"
+export TMX_VLLM_BOOTSTRAP_RETRIES="${TMX_VLLM_BOOTSTRAP_RETRIES:-2}"
+export TMX_VLLM_BOOTSTRAP_RETRY_SLEEP="${TMX_VLLM_BOOTSTRAP_RETRY_SLEEP:-5}"
+export ALLOW_DEGRADED_SERVE="${ALLOW_DEGRADED_SERVE:-1}"
+export MIN_HEALTHY_SERVE_WORKERS="${MIN_HEALTHY_SERVE_WORKERS:-40}"
+
+export TMX_AIME_PROBE_EVERY_STEPS="${TMX_AIME_PROBE_EVERY_STEPS:-25}"
+export TMX_AIME_PROBE_NUM_PROBLEMS="${TMX_AIME_PROBE_NUM_PROBLEMS:-6}"
+export TMX_AIME_PROBE_NUM_ROLLOUTS="${TMX_AIME_PROBE_NUM_ROLLOUTS:-4}"
+export TMX_AIME_PROBE_MAX_TOKENS="${TMX_AIME_PROBE_MAX_TOKENS:-16384}"
+export TMX_AIME_PROBE_CONCURRENCY="${TMX_AIME_PROBE_CONCURRENCY:-32}"
+
+# 16 train workers x 4 chips = 64-chip train slice. Manual topology is
+# overridable because v5litepod-256 may require libtpu's slice-builder view.
+export TPU_ACCELERATOR_TYPE="${TPU_ACCELERATOR_TYPE:-v5litepod-256}"
+export TMX_USE_MANUAL_TPU_TOPOLOGY="${TMX_USE_MANUAL_TPU_TOPOLOGY:-1}"
+export TMX_TPU_HOST_BOUNDS="${TMX_TPU_HOST_BOUNDS:-4,4,1}"
+export JAX_INITIALIZATION_TIMEOUT="${JAX_INITIALIZATION_TIMEOUT:-1200}"
+export COORD_PORT="${COORD_PORT:-12345}"
+
+export TMX_DAPO_DRGRPO_FULL_CONTRACT=1
+export TMX_DAPO_DRGRPO_CONTRACT_COMPLETION_LEN="$MAX_COMPLETION_LEN"
+export TMX_DAPO_DRGRPO_CONTRACT_SOFT_OVERLONG_EXPECTED_LEN="$SOFT_OVERLONG_EXPECTED_LEN"
+export TMX_DAPO_DRGRPO_CONTRACT_SOFT_OVERLONG_CACHE_LEN="$SOFT_OVERLONG_CACHE_LEN"
+export TMX_ALLOW_LONG_COMPLETION_TRAIN=1
+export TMX_REQUIRE_WANDB="${TMX_REQUIRE_WANDB:-0}"
+export TMX_WANDB_SINGLE_RUN=1
+export TMX_WANDB_COMPACT=1
+export TMX_WANDB_MINIMAL=1
+export TMX_WANDB_EVAL_PROGRESS=0
+
+echo "[trc256-launch] run=$RUN_NAME"
+if [ -n "$INIT_CHECKPOINT" ]; then
+  echo "[trc256-launch] checkpoint=$INIT_CHECKPOINT"
+else
+  echo "[trc256-launch] checkpoint=<fresh base model>"
+fi
+echo "[trc256-launch] train_workers=[$TRAIN_WORKERS]"
+echo "[trc256-launch] serve_workers=[$SERVE_WORKERS]"
+echo "[trc256-launch] contract: G=$GRPO_NUM_GENERATIONS batch=$GRPO_BATCH_SIZE max_completion=$MAX_COMPLETION_LEN lambda=$LAMBDA_NOVELTY"
+
+exec "$ROOT_DIR/scripts/restart_dapo_drgrpo_twoslice.sh"

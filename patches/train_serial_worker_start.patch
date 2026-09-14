@@ -1,0 +1,95 @@
+diff --git a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+index 0000000..0000000 100755
+--- a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
++++ b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+@@ -319,54 +319,49 @@
+     --worker="$w" --zone="$ZONE" --tunnel-through-iap >/dev/null
+ done
+ 
+-launch_pids=()
+ for idx in "${!train_workers[@]}"; do
+   w="${train_workers[$idx]}"
+-  (
+-    gcloud alpha compute tpus tpu-vm ssh "$TPU_NAME" --worker="$w" --zone="$ZONE" --tunnel-through-iap --command="
+-    set -euo pipefail
+-    RUN='$RUN_NAME'
+-    pkill -9 -f '[p]ython -m tmx_jax' 2>/dev/null || true
+-    pkill -9 -f '[V]LLM::EngineCore|[v]llm.entrypoints.openai.api_server|[v]llm serve' 2>/dev/null || true
+-    (tmux ls 2>/dev/null || true) | while IFS=: read -r s rest; do
+-      case \"\$s\" in *\"\$RUN\"*) tmux kill-session -t \"\$s\" 2>/dev/null || true ;; esac
+-    done
+-    mkdir -p ~/runs/$RUN_NAME
+-    chmod +x /tmp/${RUN_NAME}_w${w}.sh
+-    tmux_ok=0
+-    if command -v tmux >/dev/null 2>&1; then
+-      # Some TPU images leave a stale tmux socket and the server exits before
+-      # listing sessions. Clear only this user's socket, then fall back to
+-      # nohup if tmux is still unavailable.
+-      rm -rf /tmp/tmux-\$(id -u) 2>/dev/null || true
+-      if tmux new-session -d -s '${RUN_NAME}_w${w}' 'bash /tmp/${RUN_NAME}_w${w}.sh' \
+-        2>~/runs/$RUN_NAME/tmux_start_w${w}.err; then
+-        if tmux has-session -t '${RUN_NAME}_w${w}' 2>/dev/null; then
+-          tmux_ok=1
+-        fi
++  echo "[launch] starting train worker $w"
++  gcloud alpha compute tpus tpu-vm ssh "$TPU_NAME" --worker="$w" --zone="$ZONE" --tunnel-through-iap --command="
++  set -euo pipefail
++  RUN='$RUN_NAME'
++  pkill -9 -f '[p]ython -m tmx_jax' 2>/dev/null || true
++  pkill -9 -f '[V]LLM::EngineCore|[v]llm.entrypoints.openai.api_server|[v]llm serve' 2>/dev/null || true
++  (tmux ls 2>/dev/null || true) | while IFS=: read -r s rest; do
++    case \"\$s\" in *\"\$RUN\"*) tmux kill-session -t \"\$s\" 2>/dev/null || true ;; esac
++  done
++  mkdir -p ~/runs/$RUN_NAME
++  chmod +x /tmp/${RUN_NAME}_w${w}.sh
++  tmux_ok=0
++  if command -v tmux >/dev/null 2>&1; then
++    # Some TPU images leave a stale tmux socket and the server exits before
++    # listing sessions. Clear only this user's socket, then fall back to
++    # nohup if tmux is still unavailable.
++    rm -rf /tmp/tmux-\$(id -u) 2>/dev/null || true
++    if tmux new-session -d -s '${RUN_NAME}_w${w}' 'bash /tmp/${RUN_NAME}_w${w}.sh' \
++      2>~/runs/$RUN_NAME/tmux_start_w${w}.err; then
++      if tmux has-session -t '${RUN_NAME}_w${w}' 2>/dev/null; then
++        tmux_ok=1
+       fi
+     fi
+-    if [ \${tmux_ok:-0} != 1 ]; then
+-      echo '[launch] tmux unavailable; falling back to nohup for worker ${w}' \
+-        | tee -a ~/runs/$RUN_NAME/launcher_w${w}.log
+-      nohup bash /tmp/${RUN_NAME}_w${w}.sh >~/runs/$RUN_NAME/nohup_w${w}.log 2>&1 < /dev/null &
+-      echo \$! > ~/runs/$RUN_NAME/pid_w${w}.pid
+-    fi
+-    sleep 2
+-    if ! tmux has-session -t '${RUN_NAME}_w${w}' 2>/dev/null \
+-      && ! pgrep -af 'bash /tmp/${RUN_NAME}_w${w}.sh|python -m tmx_jax' >/dev/null 2>&1; then
+-      echo '[launch] ERROR: worker ${w} did not stay alive' >&2
+-      exit 1
+-    fi
+-  "
+-  ) &
+-  launch_pids+=("$!")
++  fi
++  if [ \${tmux_ok:-0} != 1 ]; then
++    echo '[launch] tmux unavailable; falling back to nohup for worker ${w}' \
++      | tee -a ~/runs/$RUN_NAME/launcher_w${w}.log
++    nohup bash /tmp/${RUN_NAME}_w${w}.sh >~/runs/$RUN_NAME/nohup_w${w}.log 2>&1 < /dev/null &
++    echo \$! > ~/runs/$RUN_NAME/pid_w${w}.pid
++  fi
++  sleep 2
++  if ! tmux has-session -t '${RUN_NAME}_w${w}' 2>/dev/null \
++    && ! pgrep -af 'bash /tmp/${RUN_NAME}_w${w}.sh|python -m tmx_jax' >/dev/null 2>&1; then
++    echo '[launch] ERROR: worker ${w} did not stay alive' >&2
++    exit 1
++  fi
++"
++  sleep "${TRAIN_LAUNCH_SLEEP_SECONDS:-1}"
+ done
+ 
+-for pid in "${launch_pids[@]}"; do
+-  wait "$pid"
+-done
+-
+ echo "RUN_NAME=$RUN_NAME"
+ echo "COORDINATOR=${coord_ip}:${COORD_PORT}"
+ echo "VLLM_URLS=$vllm_urls"

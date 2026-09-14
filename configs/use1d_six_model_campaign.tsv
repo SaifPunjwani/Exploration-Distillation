@@ -1,0 +1,7 @@
+# label	model_name	train_dataset	eval_order	single_round_control	size_tier	notes
+qwen25_math_1p5b	Qwen/Qwen2.5-Math-1.5B-Instruct	dapo_math_17k	1	yes	small	primary internal anchor
+qwen3_1p7b	Qwen/Qwen3-1.7B	dapo_math_17k	2	yes	small	target external comparison
+openmath_nemotron_1p5b	nvidia/OpenMath-Nemotron-1.5B	dapo_math_17k	3	no	small	open math specialist comparison
+phi4_mini_reasoning	microsoft/Phi-4-mini-reasoning	dapo_math_17k	4	no	small	non-Qwen reasoning control
+qwen3_4b	Qwen/Qwen3-4B	dapo_math_17k	5	no	medium	qwen family scale-up
+openmath_nemotron_7b	nvidia/OpenMath-Nemotron-7B	dapo_math_17k	6	no	medium	open math larger control

@@ -1,0 +1,18 @@
+# JAX / TPU runtime
+jax[tpu]>=0.4.35
+flax>=0.8.5
+optax>=0.2.3
+orbax-checkpoint>=0.5.20
+# HF stack (for tokenizer + weight loading)
+transformers>=4.45.0
+huggingface_hub>=0.24.0
+safetensors>=0.4.5
+tokenizers>=0.19.0
+# Data
+datasets>=2.20.0
+# Misc
+requests>=2.32
+wandb>=0.17.0
+numpy>=1.26,<2
+sentencepiece
+jinja2

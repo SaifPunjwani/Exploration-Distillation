@@ -1,0 +1,91 @@
+{
+  "name": "dapo16k_drgrpo_novelty075_trc256_prod",
+  "network": {
+    "project": "",
+    "zone": "us-central1-a",
+    "tpu_name": "trc2-v5lite256-uc1a-r1",
+    "accelerator_type": "v5litepod-256",
+    "external_ips_required": true,
+    "create_tpu": false,
+    "allow_nat": false,
+    "allow_internal_ips": false
+  },
+  "topology": {
+    "total_workers": 64,
+    "chips_per_worker": 4,
+    "train_workers": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    "rollout_workers": [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63],
+    "train_chips": [0, 1, 2, 3],
+    "rollout_chips": [0, 1, 2, 3]
+  },
+  "storage": {
+    "hf_model_repo": "SaifPunjwani/two-model-exploration-models",
+    "hf_dataset_repo": "SaifPunjwani/two-model-exploration-checkpoints",
+    "artifact_prefix": "dapo16k_drgrpo_novelty075_trc256_prod",
+    "allow_gcs": false,
+    "checkpoint_every_steps": 25,
+    "rollout_upload_policy": "sharded",
+    "process_zero_uploads_only": true
+  },
+  "logging": {
+    "wandb_project": "two-model-explore",
+    "wandb_entity": "",
+    "minimal_wandb": true,
+    "process_zero_only": true
+  },
+  "resume": {
+    "fresh_run": true,
+    "source_run": "",
+    "source_step": "latest",
+    "init_checkpoint": ""
+  },
+  "algorithm": {
+    "phase": "explorer_novelty",
+    "model_name": "Qwen/Qwen3-1.7B",
+    "dataset_name": "dapo_math_17k",
+    "max_prompt_len": 2048,
+    "max_completion_len": 16384,
+    "max_total_len": 18432,
+    "grpo_batch_size": 4,
+    "grpo_grad_accum": 1,
+    "grpo_num_generations": 16,
+    "grpo_max_steps": 100,
+    "grpo_lr": 0.000005,
+    "grpo_clip_epsilon": 0.2,
+    "grpo_clip_epsilon_high": 0.28,
+    "grpo_kl_beta": 0.0,
+    "grpo_advantage_normalization": "none",
+    "dynamic_sampling": true,
+    "dynamic_sampling_max_attempts": 8,
+    "dynamic_sampling_groups_per_attempt": 1,
+    "dynamic_sampling_accept_reward_variance": true,
+    "lambda_novelty": 0.75,
+    "novelty_layers": "7,14,21",
+    "novelty_metric": "sqrt_mse",
+    "incorrect_novelty_scale": 1.0,
+    "soft_overlong_expected_len": 13107,
+    "soft_overlong_cache_len": 3277
+  },
+  "backend": {
+    "preferred": "xpk-gke-maxtext-tunix",
+    "fallback": "raw-tpu-tmx-jax",
+    "engine": "maxtext_tunix",
+    "container_image": "",
+    "xpk_cluster_name": "tmx-trc2-v5lite256",
+    "xpk_workload_name": "dapo16k-drgrpo-novelty075",
+    "xpk_tpu_type": "v5litepod-256",
+    "xpk_num_slices": 1,
+    "xpk_priority": "high",
+    "xpk_use_pathways": true,
+    "maxtext_root": "/workspace/MaxText",
+    "tunix_root": "/workspace/tunix",
+    "maxtext_model_name": "",
+    "maxtext_load_parameters_path": "",
+    "maxtext_base_output_directory": "/tmp/tmx-output",
+    "maxtext_entrypoint": "maxtext.trainers.post_train.rl.train_rl",
+    "maxtext_loss_algo": "grpo",
+    "reward_plugin": "tmx.orchestration.reward_plugins",
+    "experimental_adapter_ack": false,
+    "rollout_engine": "vllm_tpu"
+  }
+}

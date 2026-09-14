@@ -1,0 +1,134 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+rl_env*/
+.venv*/
+venv*/
+
+# Local secrets
+.env
+.env.local
+
+# Agent/automation state
+AGENTS.md
+CLAUDE.md
+.claude/
+autoresearch-*
+autoresearch-*.json
+autoresearch-*.log
+codex-autoresearch/
+.scratch/
+PAPER_CONTEXT.md
+
+# Experiment outputs
+baseline_runs/
+wandb/
+wandb_replica/
+runs/
+runs_logs/
+outputs/
+logs/
+hf_upload_logs/
+plots/
+paper_figures/
+research-results.tsv
+.hf/
+.hf_test/
+.hf_*/
+.cpu_*/
+.tpu_*/
+.wandb_cache/
+.wandb_data/
+.smoke*/
+professor_packet/
+baseline_grpo/
+gpu_train/
+explorer_grpo_*/
+explorer_grpo_dr_grpo_lambda*/
+explorer_trajectories*.jsonl
+explorer_trajectories_jsons/
+rollouts/
+rollouts_*/
+rollouts_local/
+rollouts_recent/
+rollouts_v5/
+rollouts_lambda0/
+*.ipynb
+.ipynb_checkpoints/
+
+# Checkpoints / artifacts
+**/checkpoint-*/
+checkpoints/
+artifacts/
+optimizer.pt
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# Data artifacts
+*.parquet
+*.arrow
+*.npz
+*.pkl
+*.h5
+*.jsonl
+
+# Runtime/process byproducts
+*.log
+*.pid
+*.env
+*.env.txt
+*.rc
+*.tmp
+*.tmux
+*.nohup
+
+# OS/editor
+.DS_Store
+.vscode/
+
+# Local cloud tooling
+.gcloud_codex/
+
+# Local-only weekly update docs
+WEEKLY_UPDATE_2026-03-24.md
+WEEKLY_UPDATE_PRESENTATION_2026-03-24.md
+
+# Local-only presentation / synthetic plot builders
+scripts/build_qwen3_baseline_tracking_chart.py
+scripts/build_clean_aime_and_novelty_figures.py
+scripts/build_novelty_validation_pack.py
+scripts/build_weekly_update_landscape_pack.py
+scripts/build_weekly_update_pack.py
+scripts/build_weekly_update_presentation_figures.py
+scripts/meeting_novelty_snapshot.py
+
+# Paper handoff bundles (large; not tracked)
+paper_handoff/
+
+# Paper & results artifacts (uncommitted 2026-07-30; kept on disk, tracked outside repo)
+*.pdf
+paper_v2/
+neurips/
+docs/paper/
+baseline_runs_gpu/RESULTS.md
+*.zip
+uv.lock
+.DS_Store
+analysis/
+
+EXPERIMENT_STATUS.md
+EXPERIMENT_UPDATES.md
+LITERATURE_LEDGER.md
+
+# Tool caches and local run/monitor state
+.pytest_cache/
+.ruff_cache/
+screenlog.*
+scratch_*.py

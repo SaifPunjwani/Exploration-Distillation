@@ -1,0 +1,131 @@
+{
+  "algorithm": {
+    "apply_format_penalty": false,
+    "benchmark_max_completion_len": 32768,
+    "benchmark_num_rollouts": 32,
+    "dataset_name": "dapo_math_17k",
+    "distill_batch_size": 1,
+    "distill_epochs": 2,
+    "dynamic_sampling": true,
+    "dynamic_sampling_accept_reward_variance": false,
+    "dynamic_sampling_groups_per_attempt": 1,
+    "dynamic_sampling_max_attempts": 8,
+    "format_penalty_weight": 0.0,
+    "grpo_advantage_normalization": "none",
+    "grpo_batch_size": 1,
+    "grpo_clip_epsilon": 0.2,
+    "grpo_clip_epsilon_high": 0.28,
+    "grpo_grad_accum": 1,
+    "grpo_kl_beta": 0.0,
+    "grpo_lr": 1e-06,
+    "grpo_max_steps": 250,
+    "grpo_num_generations": 16,
+    "incorrect_novelty_scale": 0.0,
+    "lambda_novelty": 0.0,
+    "max_completion_len": 16384,
+    "max_distill_examples": 20000,
+    "max_prompt_len": 2048,
+    "max_total_len": 18432,
+    "model_name": "Qwen/Qwen3-1.7B",
+    "novelty_layers": "7,14,21",
+    "novelty_metric": "sqrt_mse",
+    "phase": "actual_grpo",
+    "reward_correct": 1.0,
+    "reward_incorrect": -1.0,
+    "soft_overlong_cache_len": 3277,
+    "soft_overlong_expected_len": 13107
+  },
+  "backend": {
+    "container_image": "",
+    "engine": "maxtext_tunix",
+    "experimental_adapter_ack": false,
+    "fallback": "raw-tpu-tmx-jax",
+    "maxtext_base_output_directory": "/tmp/tmx-output",
+    "maxtext_entrypoint": "maxtext.trainers.post_train.rl.train_rl",
+    "maxtext_load_parameters_path": "",
+    "maxtext_loss_algo": "grpo",
+    "maxtext_model_name": "",
+    "maxtext_root": "/workspace/MaxText",
+    "preferred": "xpk-gke-maxtext-tunix",
+    "reward_plugin": "tmx.orchestration.reward_plugins",
+    "rollout_engine": "vllm_tpu",
+    "tunix_root": "/workspace/tunix",
+    "xpk_cluster_name": "tmx-trc2-v5lite256",
+    "xpk_num_slices": 1,
+    "xpk_priority": "high",
+    "xpk_tpu_type": "v5litepod-64",
+    "xpk_use_pathways": true,
+    "xpk_workload_name": ""
+  },
+  "logging": {
+    "minimal_wandb": true,
+    "process_zero_only": true,
+    "wandb_entity": "",
+    "wandb_project": "two-model-explore"
+  },
+  "name": "dapo16k_drgrpo_actual_from_lambda05_sft_cyber_v5_20260430_205126",
+  "network": {
+    "accelerator_type": "v5litepod-64",
+    "allow_internal_ips": false,
+    "allow_nat": false,
+    "create_tpu": false,
+    "external_ips_required": true,
+    "project": "",
+    "tpu_name": "",
+    "zone": "us-central1-a"
+  },
+  "resume": {
+    "existing_trajectories": "hf://SaifPunjwani/two-model-exploration-checkpoints/dapo16k_drgrpo_novelty05_hf_resume49_20260429_174651_wandbresume_parallelvllm/explorer/trajectories/explorer_trajectories_latest.jsonl",
+    "fresh_run": false,
+    "init_checkpoint": "",
+    "source_run": "",
+    "source_step": "latest"
+  },
+  "storage": {
+    "allow_gcs": false,
+    "artifact_prefix": "",
+    "checkpoint_every_steps": 25,
+    "hf_dataset_repo": "SaifPunjwani/two-model-exploration-checkpoints",
+    "hf_model_repo": "SaifPunjwani/two-model-exploration-models",
+    "hf_repo_type_data": "dataset",
+    "hf_repo_type_models": "model",
+    "process_zero_uploads_only": true,
+    "rollout_upload_policy": "sharded"
+  },
+  "topology": {
+    "chips_per_worker": 4,
+    "rollout_chips": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "rollout_workers": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "total_workers": 16,
+    "train_chips": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "train_workers": [
+      0,
+      1,
+      2,
+      3
+    ]
+  }
+}

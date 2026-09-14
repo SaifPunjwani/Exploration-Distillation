@@ -1,0 +1,63 @@
+# Production TPU image for the optimized Tunix/MaxText/vLLM-TPU path.
+#
+# Critical correctness notes (do not silently change):
+#  - Base image is jax-stable-stack/jax-tpu (has libtpu + JAX TPU build).
+#    python:3.12-slim does not have libtpu and breaks JAX TPU init.
+#  - vLLM and tpu-inference are pinned to specific git commits in tunix's
+#    requirements; PyPI vllm will resolve to a different commit and break.
+#    We therefore install Tunix from source against its own requirements.txt
+#    with VLLM_TARGET_DEVICE=tpu so the right wheels are built.
+#  - MaxText is also installed from source — `maxtext[runner]` on PyPI lags
+#    the post_train.rl module we depend on.
+#  - Default ENTRYPOINT runs the Tunix CLI dispatch (tunix_workload.py),
+#    NOT MaxText's stock train_rl.py — MaxText hard-codes GSM8K rewards.
+FROM us-docker.pkg.dev/cloud-tpu-images/jax-stable-stack/jax-tpu:latest
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    PYTHONPATH=/workspace/tmx \
+    JAX_COMPILATION_CACHE_DIR=/workspace/.xla_cache \
+    JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0 \
+    JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=1.0 \
+    TOKENIZERS_PARALLELISM=false \
+    VLLM_TARGET_DEVICE=tpu
+
+RUN pip install --upgrade pip
+
+# Tunix from source — must use tunix's pinned vllm + tpu-inference commits,
+# not PyPI. Bump TUNIX_REF intentionally with a smoke test.
+ARG TUNIX_REF=main
+RUN git clone --depth 1 --branch ${TUNIX_REF} https://github.com/google/tunix.git /opt/tunix \
+ && pip install -r /opt/tunix/requirements/requirements.txt \
+ && pip install /opt/tunix
+
+# MaxText from source — provides the model engine Tunix loads via
+# model_source=maxtext. We import maxtext as a library, not as the entrypoint.
+ARG MAXTEXT_REF=main
+RUN git clone --depth 1 --branch ${MAXTEXT_REF} https://github.com/AI-Hypercomputer/maxtext.git /opt/maxtext \
+ && pip install /opt/maxtext
+
+# Application deps. transformers and HF transfer are required by Tunix.
+RUN pip install \
+    "transformers<5" \
+    "huggingface_hub[hf_transfer]" \
+    "wandb<1.0" \
+    "pyyaml"
+
+RUN mkdir -p /workspace/.xla_cache /workspace/tmx /tmp/tmx-output
+
+WORKDIR /workspace/tmx
+COPY . /workspace/tmx
+
+# Build-time smoke: fail fast if Tunix/MaxText imports break, before XPK
+# spends time scheduling a workload that's just going to crash on import.
+RUN python -c "import jax; print('[docker] jax', jax.__version__); \
+import maxtext; print('[docker] maxtext OK'); \
+import tunix; print('[docker] tunix OK'); \
+from tunix.rl.grpo.drgrpo_learner import DrGRPOConfig; \
+from tunix.cli.config import obtain_reward_fn; \
+print('[docker] tunix DR-GRPO + reward plugin loader OK')"
+
+ENTRYPOINT ["python", "-m", "tmx.orchestration.tunix_workload", "run"]

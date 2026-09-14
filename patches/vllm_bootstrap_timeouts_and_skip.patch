@@ -1,0 +1,98 @@
+diff --git a/tmx_jax/scripts/bootstrap_vllm_slice.sh b/tmx_jax/scripts/bootstrap_vllm_slice.sh
+--- a/tmx_jax/scripts/bootstrap_vllm_slice.sh
++++ b/tmx_jax/scripts/bootstrap_vllm_slice.sh
+@@ -22,6 +22,10 @@
+ VLLM_ENV_CACHE_GCS_URI="${VLLM_ENV_CACHE_GCS_URI:-gs://two-model-exploration-checkpoints/shared_envs/v5lite_vllm_tpu_0.13.3_py311.tar.gz}"
+ LAUNCH_RETRIES="${TMX_VLLM_BOOTSTRAP_RETRIES:-4}"
+ LAUNCH_RETRY_SLEEP="${TMX_VLLM_BOOTSTRAP_RETRY_SLEEP:-8}"
++SKIP_FAILED_WORKERS="${TMX_VLLM_SKIP_FAILED_WORKERS:-0}"
++SSH_CONNECT_TIMEOUT_SECONDS="${TMX_VLLM_SSH_CONNECT_TIMEOUT_SECONDS:-30}"
++SSH_SERVER_ALIVE_INTERVAL="${TMX_VLLM_SSH_SERVER_ALIVE_INTERVAL:-10}"
++SSH_SERVER_ALIVE_COUNT_MAX="${TMX_VLLM_SSH_SERVER_ALIVE_COUNT_MAX:-3}"
+ 
+ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ BOOTSTRAP_LOCAL="$SCRIPT_DIR/bootstrap_vllm_worker.sh"
+@@ -29,13 +33,23 @@
+ if [ -n "$TPU_PROJECT" ]; then
+   gcloud_cmd+=(--project="$TPU_PROJECT")
+ fi
++ssh_flags=(
++  --ssh-flag="-o ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
++  --ssh-flag="-o ServerAliveInterval=${SSH_SERVER_ALIVE_INTERVAL}"
++  --ssh-flag="-o ServerAliveCountMax=${SSH_SERVER_ALIVE_COUNT_MAX}"
++)
++scp_flags=(
++  --scp-flag="-o ConnectTimeout=${SSH_CONNECT_TIMEOUT_SECONDS}"
++)
+ 
+ if [ ! -f "$BOOTSTRAP_LOCAL" ]; then
+   echo "ERROR: missing $BOOTSTRAP_LOCAL" >&2
+   exit 1
+ fi
+ 
++launched_workers=""
+ for w in $WORKERS; do
++  worker_failed=0
+   echo "[vllm-slice] syncing bootstrap script to worker $w"
+   for attempt in $(seq 1 "$LAUNCH_RETRIES"); do
+     if "${gcloud_cmd[@]}" alpha compute tpus tpu-vm scp \
+@@ -43,16 +57,23 @@
+       "$TPU_NAME:~/bootstrap_vllm_worker.sh" \
+       --worker="$w" \
+       --zone="$ZONE" \
+-      --tunnel-through-iap >/dev/null; then
++      --tunnel-through-iap \
++      "${scp_flags[@]}" >/dev/null; then
+       break
+     fi
+     if [ "$attempt" -eq "$LAUNCH_RETRIES" ]; then
++      if [ "$SKIP_FAILED_WORKERS" != "0" ]; then
++        echo "[vllm-slice] WARN scp failed worker=$w after $LAUNCH_RETRIES attempts; skipping"
++        worker_failed=1
++        break
++      fi
+       echo "[vllm-slice] ERROR scp failed worker=$w after $LAUNCH_RETRIES attempts" >&2
+       exit 1
+     fi
+     echo "[vllm-slice] WARN scp failed worker=$w attempt=$attempt; retrying"
+     sleep "$LAUNCH_RETRY_SLEEP"
+   done
++  [ "$worker_failed" = "1" ] && continue
+ 
+   echo "[vllm-slice] launching worker $w"
+   for attempt in $(seq 1 "$LAUNCH_RETRIES"); do
+@@ -61,6 +82,7 @@
+       --worker="$w" \
+       --zone="$ZONE" \
+       --tunnel-through-iap \
++      "${ssh_flags[@]}" \
+       --command="
+         chmod +x ~/bootstrap_vllm_worker.sh
+         MODEL='$MODEL' \
+@@ -82,12 +104,25 @@
+       break
+     fi
+     if [ "$attempt" -eq "$LAUNCH_RETRIES" ]; then
++      if [ "$SKIP_FAILED_WORKERS" != "0" ]; then
++        echo "[vllm-slice] WARN launch failed worker=$w after $LAUNCH_RETRIES attempts; skipping"
++        worker_failed=1
++        break
++      fi
+       echo "[vllm-slice] ERROR launch failed worker=$w after $LAUNCH_RETRIES attempts" >&2
+       exit 1
+     fi
+     echo "[vllm-slice] WARN launch failed worker=$w attempt=$attempt; retrying"
+     sleep "$LAUNCH_RETRY_SLEEP"
+   done
++  [ "$worker_failed" = "1" ] && continue
++  launched_workers="$launched_workers $w"
+ done
+ 
+-echo "[vllm-slice] launched workers: $WORKERS"
++launched_workers="$(printf '%s\n' "$launched_workers" | xargs || true)"
++if [ -z "$launched_workers" ]; then
++  echo "[vllm-slice] ERROR no workers launched" >&2
++  exit 1
++fi
++
++echo "[vllm-slice] launched workers: $launched_workers"

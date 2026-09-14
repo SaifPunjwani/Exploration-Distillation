@@ -1,0 +1,15 @@
+diff --git a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+index 0000000..0000000 100755
+--- a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
++++ b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+@@ -328,9 +328,9 @@ for idx in "${!train_workers[@]}"; do
+     RUN='$RUN_NAME'
+     pkill -9 -f '[p]ython -m tmx_jax' 2>/dev/null || true
+     pkill -9 -f '[V]LLM::EngineCore|[v]llm.entrypoints.openai.api_server|[v]llm serve' 2>/dev/null || true
+-    tmux ls 2>/dev/null | while IFS=: read -r s rest; do
++    (tmux ls 2>/dev/null || true) | while IFS=: read -r s rest; do
+       case \"\$s\" in *\"\$RUN\"*) tmux kill-session -t \"\$s\" 2>/dev/null || true ;; esac
+     done
+     mkdir -p ~/runs/$RUN_NAME
+     chmod +x /tmp/${RUN_NAME}_w${w}.sh
+     tmux new-session -d -s '${RUN_NAME}_w${w}' 'bash /tmp/${RUN_NAME}_w${w}.sh'

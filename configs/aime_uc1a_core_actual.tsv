@@ -1,0 +1,2 @@
+# label	source_type	model_ref	role_label	notes
+qwen25_ws_actual_promoted	wandb_artifact	<wandb-entity>/two-model-explore/main_recipe_20260324_20_two_ws_distill_dl5e6-actual-model:promoted	actual	promoted qwen2.5 actual artifact

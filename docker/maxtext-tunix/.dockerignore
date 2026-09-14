@@ -1,0 +1,80 @@
+# Keep build context minimal. Without this the COPY pulls in tens of GB of
+# wandb logs / runs_logs / rollouts.
+
+# VCS / IDE
+.git
+.gitignore
+.vscode
+.DS_Store
+
+# Caches
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+
+# Python envs
+.venv*
+venv*
+rl_env*
+
+# Experiment outputs
+wandb
+runs
+runs_logs
+outputs
+logs
+rollouts
+rollouts_*
+plots
+paper_figures
+hf_upload_logs
+.hf
+.hf_*
+.cpu_*
+.tpu_*
+.wandb_cache
+.wandb_data
+.smoke*
+gpu_train
+explorer_grpo_*
+baseline_grpo
+research-results.tsv
+
+# Checkpoints
+**/checkpoint-*
+checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# Data
+*.parquet
+*.arrow
+*.npz
+*.pkl
+*.h5
+*.jsonl
+
+# Runtime
+*.log
+*.pid
+*.env
+*.tmp
+*.tmux
+*.nohup
+*.rc
+
+# Agent / scratch
+.claude
+.scratch
+codex-autoresearch
+PAPER_CONTEXT.md
+WEEKLY_UPDATE_*
+
+# Docker artifacts
+docker/maxtext-tunix/.last_image

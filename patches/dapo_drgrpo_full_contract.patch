@@ -1,0 +1,241 @@
+diff --git a/tmx_jax/config.py b/tmx_jax/config.py
+index e394d53..f5ef51d 100644
+--- a/tmx_jax/config.py
++++ b/tmx_jax/config.py
+@@ -115,10 +115,14 @@ def validate_contract(cfg: TrainConfig, *, require_eval_contract: bool = False)
+     long_completion_train = os.environ.get("TMX_ALLOW_LONG_COMPLETION_TRAIN", "0") in {
+         "1", "true", "True", "yes", "on"
+     }
++    full_dapo_drgrpo = os.environ.get("TMX_DAPO_DRGRPO_FULL_CONTRACT", "0") in {
++        "1", "true", "True", "yes", "on"
++    }
++    expected_num_generations = 16 if full_dapo_drgrpo else 8
+     expected = {
+         "grpo_batch_size": 1,
+         "grpo_grad_accum": 2,
+-        "grpo_num_generations": 8,
++        "grpo_num_generations": expected_num_generations,
+         "grpo_loss_type": "dr_grpo",
+         "optimizer": "adamw",
+         "novelty_zscore": "off",
+@@ -130,9 +134,12 @@ def validate_contract(cfg: TrainConfig, *, require_eval_contract: bool = False)
+     if cfg.max_prompt_len != 2048:
+         mismatches.append(f"max_prompt_len={cfg.max_prompt_len!r} expected 2048")
+     if long_completion_train:
+-        if cfg.max_completion_len not in (8192, 12288, 16384, 20480):
++        allowed_completion_lens = (20480,) if full_dapo_drgrpo else (8192, 12288, 16384, 20480)
++        if cfg.max_completion_len not in allowed_completion_lens:
+             mismatches.append(
+-                f"max_completion_len={cfg.max_completion_len!r} expected one of 8192/12288/16384/20480"
++                "max_completion_len="
++                f"{cfg.max_completion_len!r} expected one of "
++                f"{'/'.join(str(x) for x in allowed_completion_lens)}"
+             )
+         if cfg.max_total_len != cfg.max_prompt_len + cfg.max_completion_len:
+             mismatches.append(
+@@ -166,6 +173,35 @@ def validate_contract(cfg: TrainConfig, *, require_eval_contract: bool = False)
+         mismatches.append(
+             f"max_train_examples={cfg.max_train_examples!r} expected full DAPO scale (>=17000)"
+         )
++    if full_dapo_drgrpo:
++        if not bool(cfg.dynamic_sampling):
++            mismatches.append("dynamic_sampling=False expected True for DAPO dynamic sampling")
++        if int(cfg.grpo_updates_per_rollout) != 16:
++            mismatches.append(
++                f"grpo_updates_per_rollout={cfg.grpo_updates_per_rollout!r} expected 16"
++            )
++        if str(cfg.grpo_advantage_normalization or "").lower() not in ("std", "zscore", "group_std", "grpo"):
++            mismatches.append(
++                "grpo_advantage_normalization must be std/group_std for DAPO group normalization"
++            )
++        if abs(float(cfg.grpo_clip_epsilon) - 0.2) > 1e-9:
++            mismatches.append(f"grpo_clip_epsilon={cfg.grpo_clip_epsilon!r} expected 0.2")
++        if abs(float(cfg.grpo_clip_epsilon_high) - 0.28) > 1e-9:
++            mismatches.append(f"grpo_clip_epsilon_high={cfg.grpo_clip_epsilon_high!r} expected 0.28")
++        if abs(float(cfg.grpo_kl_beta or 0.0)) > 1e-12:
++            mismatches.append(f"grpo_kl_beta={cfg.grpo_kl_beta!r} expected 0.0")
++        if abs(float(cfg.reward_correct) - 1.0) > 1e-9:
++            mismatches.append(f"reward_correct={cfg.reward_correct!r} expected 1.0")
++        if abs(float(cfg.reward_incorrect) - (-1.0)) > 1e-9:
++            mismatches.append(f"reward_incorrect={cfg.reward_incorrect!r} expected -1.0")
++        if int(cfg.soft_overlong_expected_len or 0) != 16384:
++            mismatches.append(
++                f"soft_overlong_expected_len={cfg.soft_overlong_expected_len!r} expected 16384"
++            )
++        if int(cfg.soft_overlong_cache_len or 0) != 4096:
++            mismatches.append(
++                f"soft_overlong_cache_len={cfg.soft_overlong_cache_len!r} expected 4096"
++            )
+     if require_eval_contract:
+         if cfg.benchmark_num_rollouts != 32:
+             mismatches.append(f"benchmark_num_rollouts={cfg.benchmark_num_rollouts!r} expected 32")
+diff --git a/tmx_jax/scripts/launch_jax_pipeline.sh b/tmx_jax/scripts/launch_jax_pipeline.sh
+index fd3ad1c..c67f07c 100755
+--- a/tmx_jax/scripts/launch_jax_pipeline.sh
++++ b/tmx_jax/scripts/launch_jax_pipeline.sh
+@@ -26,7 +26,11 @@ printf '%s\n' "$RUN_NAME" > "$HOME/active_jax_run_name"
+ MODEL_NAME="${MODEL_NAME:-Qwen/Qwen3-1.7B}"
+ MAX_TRAIN_EXAMPLES="${MAX_TRAIN_EXAMPLES:-20000}"
+ GRPO_MAX_STEPS="${GRPO_MAX_STEPS:-500}"
++GRPO_NUM_GENERATIONS="${GRPO_NUM_GENERATIONS:-8}"
++TRAJECTORY_BATCH_SIZE="${TRAJECTORY_BATCH_SIZE:-2}"
+ ACTUAL_ONLINE_GRPO_MAX_STEPS="${ACTUAL_ONLINE_GRPO_MAX_STEPS:-250}"
++ACTUAL_GRPO_LR="${ACTUAL_GRPO_LR:-1e-6}"
++ACTUAL_GRPO_KL_COEF="${ACTUAL_GRPO_KL_COEF:-0.10}"
+ SAVE_EVERY_STEPS="${SAVE_EVERY_STEPS:-50}"
+ MIN_ACCEPTED_TRAJECTORIES="${MIN_ACCEPTED_TRAJECTORIES:-2048}"
+ MAX_ACCEPTED_TRAJECTORIES="${MAX_ACCEPTED_TRAJECTORIES:-0}"
+@@ -193,7 +197,7 @@ python -m tmx_jax.pipeline \
+   --max-total-len "$MAX_TOTAL_LEN" \
+   --grpo-batch-size 1 \
+   --grpo-grad-accum 2 \
+-  --grpo-num-generations 8 \
++  --grpo-num-generations "$GRPO_NUM_GENERATIONS" \
+   --grpo-max-steps "$GRPO_MAX_STEPS" \
+   --grpo-loss-type dr_grpo \
+   --optimizer adamw \
+@@ -203,7 +207,7 @@ python -m tmx_jax.pipeline \
+   --grpo-kl-beta "${GRPO_KL_BETA:-0.0}" \
+   --grpo-updates-per-rollout "${GRPO_UPDATES_PER_ROLLOUT:-1}" \
+   --grpo-advantage-normalization "$GRPO_ADVANTAGE_NORMALIZATION" \
+-  --trajectory-batch-size 2 \
++  --trajectory-batch-size "$TRAJECTORY_BATCH_SIZE" \
+   --vllm-server-urls "$VLLM_URLS" \
+   --vllm-concurrency "$VLLM_CONCURRENCY" \
+   --vllm-fanout-per-prompt "$VLLM_FANOUT_PER_PROMPT" \
+@@ -243,8 +247,8 @@ python -m tmx_jax.pipeline \
+   --max-accepted-trajectories "$MAX_ACCEPTED_TRAJECTORIES" \
+   --accepted-selection-policy "$ACCEPTED_SELECTION_POLICY" \
+   --actual-online-grpo-max-steps "$ACTUAL_ONLINE_GRPO_MAX_STEPS" \
+-  --actual-grpo-lr 1e-6 \
+-  --actual-grpo-kl-coef "${ACTUAL_GRPO_KL_COEF:-0.10}" \
++  --actual-grpo-lr "$ACTUAL_GRPO_LR" \
++  --actual-grpo-kl-coef "$ACTUAL_GRPO_KL_COEF" \
+   --benchmark-num-rollouts "$BENCHMARK_NUM_ROLLOUTS" \
+   --benchmark-rollout-max-completion-len "$BENCHMARK_ROLLOUT_MAX_COMPLETION_LEN" \
+   --rescore-chunk-size 1 \
+diff --git a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+index 0e38332..0a0e251 100644
+--- a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
++++ b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+@@ -15,7 +15,11 @@ REMOTE_REPO="${REMOTE_REPO:-/home/<user>/tmx-jax}"
+ SYNC_LOCAL_PACKAGE="${SYNC_LOCAL_PACKAGE:-1}"
+ MAX_TRAIN_EXAMPLES="${MAX_TRAIN_EXAMPLES:-20000}"
+ GRPO_MAX_STEPS="${GRPO_MAX_STEPS:-500}"
++GRPO_NUM_GENERATIONS="${GRPO_NUM_GENERATIONS:-8}"
++TRAJECTORY_BATCH_SIZE="${TRAJECTORY_BATCH_SIZE:-2}"
+ ACTUAL_ONLINE_GRPO_MAX_STEPS="${ACTUAL_ONLINE_GRPO_MAX_STEPS:-250}"
++ACTUAL_GRPO_LR="${ACTUAL_GRPO_LR:-1e-6}"
++ACTUAL_GRPO_KL_COEF="${ACTUAL_GRPO_KL_COEF:-0.10}"
+ SAVE_EVERY_STEPS="${SAVE_EVERY_STEPS:-50}"
+ LAMBDA_NOVELTY="${LAMBDA_NOVELTY:-0.0}"
+ MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-2048}"
+@@ -24,6 +28,11 @@ MAX_TOTAL_LEN="${MAX_TOTAL_LEN:-$((MAX_PROMPT_LEN + MAX_COMPLETION_LEN))}"
+ NOVELTY_FEATURE_MAX_LENGTH="${NOVELTY_FEATURE_MAX_LENGTH:-$MAX_TOTAL_LEN}"
+ LOGPROB_CHUNK_TOKENS="${LOGPROB_CHUNK_TOKENS:-16}"
+ GRPO_LR="${GRPO_LR:-5e-6}"
++VLLM_CONCURRENCY="${VLLM_CONCURRENCY:-16}"
++VLLM_FANOUT_PER_PROMPT="${VLLM_FANOUT_PER_PROMPT:-8}"
++TEMPERATURE="${TEMPERATURE:-1.0}"
++TOP_P="${TOP_P:-0.95}"
++TOP_K="${TOP_K:-20}"
+ DYNAMIC_SAMPLING="${DYNAMIC_SAMPLING:-false}"
+ DYNAMIC_SAMPLING_MAX_ATTEMPTS="${DYNAMIC_SAMPLING_MAX_ATTEMPTS:-8}"
+ DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT="${DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT:-1}"
+@@ -247,7 +256,11 @@ export TMX_GCS_CHECKPOINT_BASE='${TMX_GCS_CHECKPOINT_BASE}'
+ export RUN_NAME='${RUN_NAME}'
+ export MAX_TRAIN_EXAMPLES='${MAX_TRAIN_EXAMPLES}'
+ export GRPO_MAX_STEPS='${GRPO_MAX_STEPS}'
++export GRPO_NUM_GENERATIONS='${GRPO_NUM_GENERATIONS}'
++export TRAJECTORY_BATCH_SIZE='${TRAJECTORY_BATCH_SIZE}'
+ export ACTUAL_ONLINE_GRPO_MAX_STEPS='${ACTUAL_ONLINE_GRPO_MAX_STEPS}'
++export ACTUAL_GRPO_LR='${ACTUAL_GRPO_LR}'
++export ACTUAL_GRPO_KL_COEF='${ACTUAL_GRPO_KL_COEF}'
+ export SAVE_EVERY_STEPS='${SAVE_EVERY_STEPS}'
+ export LAMBDA_NOVELTY='${LAMBDA_NOVELTY}'
+ export MAX_PROMPT_LEN='${MAX_PROMPT_LEN}'
+@@ -256,6 +269,11 @@ export MAX_TOTAL_LEN='${MAX_TOTAL_LEN}'
+ export NOVELTY_FEATURE_MAX_LENGTH='${NOVELTY_FEATURE_MAX_LENGTH}'
+ export LOGPROB_CHUNK_TOKENS='${LOGPROB_CHUNK_TOKENS}'
+ export GRPO_LR='${GRPO_LR}'
++export VLLM_CONCURRENCY='${VLLM_CONCURRENCY}'
++export VLLM_FANOUT_PER_PROMPT='${VLLM_FANOUT_PER_PROMPT}'
++export TEMPERATURE='${TEMPERATURE}'
++export TOP_P='${TOP_P}'
++export TOP_K='${TOP_K}'
+ export DYNAMIC_SAMPLING='${DYNAMIC_SAMPLING}'
+ export DYNAMIC_SAMPLING_MAX_ATTEMPTS='${DYNAMIC_SAMPLING_MAX_ATTEMPTS}'
+ export DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT='${DYNAMIC_SAMPLING_GROUPS_PER_ATTEMPT}'
+diff --git a/tmx_jax/scripts/run_actual_after_sft_with_reload.sh b/tmx_jax/scripts/run_actual_after_sft_with_reload.sh
+index 9e065bc..e665f95 100644
+--- a/tmx_jax/scripts/run_actual_after_sft_with_reload.sh
++++ b/tmx_jax/scripts/run_actual_after_sft_with_reload.sh
+@@ -20,6 +20,19 @@ MAX_PROMPT_LEN="${MAX_PROMPT_LEN:-2048}"
+ MAX_COMPLETION_LEN="${MAX_COMPLETION_LEN:-8192}"
+ MAX_TOTAL_LEN="${MAX_TOTAL_LEN:-$((MAX_PROMPT_LEN + MAX_COMPLETION_LEN))}"
+ NOVELTY_FEATURE_MAX_LENGTH="${NOVELTY_FEATURE_MAX_LENGTH:-$MAX_TOTAL_LEN}"
++GRPO_NUM_GENERATIONS="${GRPO_NUM_GENERATIONS:-8}"
++GRPO_CLIP_EPSILON="${GRPO_CLIP_EPSILON:-0.2}"
++GRPO_CLIP_EPSILON_HIGH="${GRPO_CLIP_EPSILON_HIGH:-$GRPO_CLIP_EPSILON}"
++GRPO_ADVANTAGE_NORMALIZATION="${GRPO_ADVANTAGE_NORMALIZATION:-none}"
++DYNAMIC_SAMPLING="${DYNAMIC_SAMPLING:-false}"
++DYNAMIC_SAMPLING_MAX_ATTEMPTS="${DYNAMIC_SAMPLING_MAX_ATTEMPTS:-8}"
++MASK_TRUNCATED_COMPLETIONS="${MASK_TRUNCATED_COMPLETIONS:-false}"
++REWARD_CORRECT="${REWARD_CORRECT:-1.0}"
++REWARD_INCORRECT="${REWARD_INCORRECT:-0.0}"
++NONTERMINATION_PENALTY="${NONTERMINATION_PENALTY:-0.0}"
++INVALID_ANSWER_PENALTY="${INVALID_ANSWER_PENALTY:-0.0}"
++SOFT_OVERLONG_EXPECTED_LEN="${SOFT_OVERLONG_EXPECTED_LEN:-0}"
++SOFT_OVERLONG_CACHE_LEN="${SOFT_OVERLONG_CACHE_LEN:-0}"
+ 
+ if [ -z "$VLLM_URLS" ]; then
+   echo "[actual-resume] ERROR: set TMX_VLLM_SERVER_URLS or VLLM_SERVER_URLS" >&2
+@@ -110,7 +123,7 @@ else
+       WORKERS="$reload_workers" \
+       SERVED_MODEL_NAME="$MODEL_NAME" \
+       LOCAL_MODEL_DIR_BASENAME="${TMX_ACTUAL_SFT_LOCAL_MODEL_BASENAME:-tmx_actual_sft_model}" \
+-      MAX_MODEL_LEN="${TMX_ACTUAL_GRPO_MAX_MODEL_LEN:-10240}" \
++      MAX_MODEL_LEN="${TMX_ACTUAL_GRPO_MAX_MODEL_LEN:-$MAX_TOTAL_LEN}" \
+       MAX_NUM_SEQS="${TMX_ACTUAL_GRPO_VLLM_MAX_NUM_SEQS:-32}" \
+       MAX_NUM_BATCHED_TOKENS="${TMX_VLLM_RELOAD_MAX_BATCHED_TOKENS:-65536}" \
+       PARALLELISM="${TMX_VLLM_RELOAD_PARALLELISM:-4}" \
+@@ -133,25 +146,34 @@ python -m tmx_jax.train \
+   --max-total-len "$MAX_TOTAL_LEN" \
+   --grpo-batch-size 1 \
+   --grpo-grad-accum 2 \
+-  --grpo-num-generations 8 \
++  --grpo-num-generations "$GRPO_NUM_GENERATIONS" \
+   --grpo-max-steps "${ACTUAL_ONLINE_GRPO_MAX_STEPS:-96}" \
+   --grpo-loss-type dr_grpo \
+   --optimizer adamw \
+   --grpo-lr "${ACTUAL_GRPO_LR:-1e-6}" \
+-  --grpo-clip-epsilon 0.2 \
+-  --grpo-kl-beta "${ACTUAL_GRPO_KL_COEF:-0.10}" \
++  --grpo-clip-epsilon "$GRPO_CLIP_EPSILON" \
++  --grpo-clip-epsilon-high "$GRPO_CLIP_EPSILON_HIGH" \
++  --grpo-kl-beta "${ACTUAL_GRPO_KL_COEF:-${GRPO_KL_BETA:-0.0}}" \
+   --grpo-updates-per-rollout "${ACTUAL_GRPO_UPDATES_PER_ROLLOUT:-1}" \
++  --grpo-advantage-normalization "$GRPO_ADVANTAGE_NORMALIZATION" \
+   --trajectory-batch-size 2 \
+   --vllm-server-urls "$VLLM_URLS" \
+   --vllm-concurrency "${VLLM_CONCURRENCY:-16}" \
+   --vllm-fanout-per-prompt "${VLLM_FANOUT_PER_PROMPT:-8}" \
++  --dynamic-sampling "$DYNAMIC_SAMPLING" \
++  --dynamic-sampling-max-attempts "$DYNAMIC_SAMPLING_MAX_ATTEMPTS" \
++  --mask-truncated-completions "$MASK_TRUNCATED_COMPLETIONS" \
+   --temperature 1.0 \
+   --top-p 0.95 \
+   --top-k 20 \
+   --enable-thinking auto \
+-  --reward-correct 1.0 \
+-  --reward-incorrect 0.0 \
++  --reward-correct "$REWARD_CORRECT" \
++  --reward-incorrect "$REWARD_INCORRECT" \
+   --format-penalty-weight 0.0 \
++  --nontermination-penalty "$NONTERMINATION_PENALTY" \
++  --invalid-answer-penalty "$INVALID_ANSWER_PENALTY" \
++  --soft-overlong-expected-len "$SOFT_OVERLONG_EXPECTED_LEN" \
++  --soft-overlong-cache-len "$SOFT_OVERLONG_CACHE_LEN" \
+   --lambda-novelty 0.0 \
+   --novelty-metric sqrt_mse \
+   --novelty-clip 0.0 \

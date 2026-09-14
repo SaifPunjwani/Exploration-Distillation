@@ -1,0 +1,24 @@
+diff --git a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+index 0000000..0000000 100755
+--- a/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
++++ b/tmx_jax/scripts/launch_jax_pipeline_multihost_v5lite.sh
+@@ -346,16 +346,16 @@ for idx in "${!train_workers[@]}"; do
+         fi
+       fi
+     fi
+-    if [ "\$tmux_ok" != "1" ]; then
+-      echo "[launch] tmux unavailable; falling back to nohup for worker ${w}" \
++    if [ \${tmux_ok:-0} != 1 ]; then
++      echo '[launch] tmux unavailable; falling back to nohup for worker ${w}' \
+         | tee -a ~/runs/$RUN_NAME/launcher_w${w}.log
+       nohup bash /tmp/${RUN_NAME}_w${w}.sh >~/runs/$RUN_NAME/nohup_w${w}.log 2>&1 < /dev/null &
+       echo \$! > ~/runs/$RUN_NAME/pid_w${w}.pid
+     fi
+     sleep 2
+     if ! tmux has-session -t '${RUN_NAME}_w${w}' 2>/dev/null \
+       && ! pgrep -af 'bash /tmp/${RUN_NAME}_w${w}.sh|python -m tmx_jax' >/dev/null 2>&1; then
+-      echo "[launch] ERROR: worker ${w} did not stay alive" >&2
++      echo '[launch] ERROR: worker ${w} did not stay alive' >&2
+       exit 1
+     fi
+   "
