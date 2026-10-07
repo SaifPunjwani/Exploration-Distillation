@@ -1,0 +1,4 @@
+# Portable CPU development environment for the public JAX implementation.
+# For reproducible tests use requirements-dev.lock; for TPU runtime use
+# expdis_jax/scripts/setup_jax_tpu.sh and expdis_jax/requirements.txt.
+-r requirements-dev.txt
