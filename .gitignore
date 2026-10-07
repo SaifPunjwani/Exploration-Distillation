@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv*/
+venv*/
+
+# Local secrets
+.env
+.env.local
+
+# Caches
+.hf/
+.hf_*/
+.wandb_cache/
+.wandb_data/
+
+# Run outputs
+wandb/
+runs/
+outputs/
+logs/
+explorer_trajectories*.jsonl
+
+# Checkpoints and large artifacts
+**/checkpoint-*/
+checkpoints/
+artifacts/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.parquet
+*.arrow
+*.npz
+*.pkl
+*.h5
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# OS and editors
+.DS_Store
+.vscode/
+.idea/
